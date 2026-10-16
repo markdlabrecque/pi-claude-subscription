@@ -5,6 +5,7 @@ import {
   readFileSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -136,7 +137,8 @@ describe("request isolation", () => {
       const cwd = body?.fake_cwd as string;
 
       expect(cwd).toBeTruthy();
-      expect(cwd.startsWith(tmpdir())).toBe(true);
+      // macOS: tmpdir() is /var/..., but the CLI reports the /private/var realpath
+      expect(cwd.startsWith(realpathSync(tmpdir()))).toBe(true);
       await vi.waitFor(() => expect(existsSync(cwd)).toBe(false));
     },
   );

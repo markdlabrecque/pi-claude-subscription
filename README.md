@@ -171,7 +171,7 @@ Result: pass.
 
 On Linux (`Linux 7.2.5`, Node 24): `npm test` 19 files, 320 tests passed; `npm run lint` clean; `npm run typecheck` clean; `npm run format:check` clean.
 
-macOS was not run: no macOS machine was available. The macOS criterion is open.
+On macOS (`Darwin 27.0.0`, Node v24.21.0): `npm test` 19 files, 328 tests passed; `npm run lint` clean; `npm run typecheck` clean; `npm run format:check` clean.
 
 ## License
 
