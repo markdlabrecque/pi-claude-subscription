@@ -13,6 +13,10 @@ import {
   validateCliAuth,
   killAllProcesses,
 } from "./src/process-manager.js";
+import {
+  isApiKeyFallbackEnabled,
+  streamViaAnthropic,
+} from "./src/api-key-fallback.js";
 import { getCustomToolDefs, writeMcpConfig } from "./src/mcp-config.js";
 
 // Kill all active Claude subprocesses on process exit to prevent orphans
@@ -109,6 +113,9 @@ export default function (pi: ExtensionAPI) {
       api: "pi-claude-subscription",
       models,
       streamSimple: (model, context, options) => {
+        if (isApiKeyFallbackEnabled()) {
+          return streamViaAnthropic(model, context, options);
+        }
         const configPath = ensureMcpConfig(pi);
         return streamViaCli(model, context, {
           ...options,
