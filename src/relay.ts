@@ -27,6 +27,7 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { AddressInfo, Socket } from "node:net";
+import { isDebugEnabled } from "./debug-log";
 
 /** An upstream response the user has to act on or wait out. */
 export interface UpstreamFailure {
@@ -145,6 +146,11 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
 
   const server: Server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0];
+    if (isDebugEnabled()) {
+      log(
+        `relay debug: ${req.method} ${path} content-length=${req.headers["content-length"] ?? "none"}`,
+      );
+    }
 
     if (req.method === "HEAD" && path === "/api/hello") {
       res.writeHead(200).end();
