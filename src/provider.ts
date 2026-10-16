@@ -44,6 +44,9 @@ import { getSessionMode } from "./session-mode.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
 
+/** What the CLI prints when `--resume` finds no readable session. */
+const SESSION_NOT_FOUND = /No conversation found with session ID/;
+
 /** Extended stream options: pi's SimpleStreamOptions plus optional cwd and mcpConfigPath */
 type StreamViaCLiOptions = SimpleStreamOptions & {
   cwd?: string;
@@ -76,7 +79,11 @@ export function streamViaCli(
   // through pi-ai's `export *` re-export chain. The class constructor exists at runtime.
   const stream = new AssistantMessageEventStream();
 
-  (async () => {
+  /**
+   * One CLI attempt. Resolves true when a resumed session was missing or
+   * corrupt and nothing was sent, so the caller can retry as replay.
+   */
+  const attempt = async (forceReplay: boolean): Promise<boolean> => {
     let proc: ReturnType<typeof spawnClaude> | undefined;
     let abortHandler: (() => void) | undefined;
     let relay: Relay | undefined;
@@ -97,14 +104,14 @@ export function streamViaCli(
           },
         });
         stream.end();
-        return;
+        return false;
       }
 
       // Replay (default) rebuilds the full history into one stateless call.
       // Resume reuses a CLI session, but only once one exists on disk: pi
       // passes sessionId on every call (including first), so the first turn
       // creates the session and later turns --resume it.
-      const replay = getSessionMode() === "replay";
+      const replay = forceReplay || getSessionMode() === "replay";
       const resumeSessionId =
         !replay && options?.sessionId && context.messages.length > 1
           ? options.sessionId
@@ -220,7 +227,7 @@ export function streamViaCli(
 
         if (options.signal.aborted) {
           abortHandler();
-          return;
+          return false;
         }
         options.signal.addEventListener("abort", abortHandler, { once: true });
       }
@@ -250,12 +257,19 @@ export function streamViaCli(
         if (broken) return; // Break-early kill, expected
         if (code !== 0 && code !== null) {
           const stderr = getStderr();
+          if (resumeLost(stderr)) return; // The caller falls back to replay
           const message = stderr
             ? `Claude CLI exited with code ${code}: ${stderr.trim()}`
             : `Claude CLI exited unexpectedly with code ${code}`;
           endStreamWithError(message);
         }
       });
+
+      // A resumed session that is gone or unreadable fails before any output
+      const resumeLost = (stderr: string) =>
+        !!resumeSessionId &&
+        SESSION_NOT_FOUND.test(stderr) &&
+        !bridge.getOutput().content?.length;
 
       // Start inactivity timer after writing user message
       resetInactivityTimer();
@@ -318,6 +332,18 @@ export function streamViaCli(
         rl.on("close", resolve);
       });
 
+      // stdout can close before the exit code and stderr are in
+      if (
+        resumeSessionId &&
+        !streamEnded &&
+        !bridge.getOutput().content?.length
+      ) {
+        await new Promise<void>((resolve) =>
+          proc!.exitCode !== null ? resolve() : proc!.once("close", resolve),
+        );
+        if (proc.exitCode !== 0 && resumeLost(getStderr())) return true;
+      }
+
       // Push done event after readline closes (async). Pushing synchronously
       // inside handleMessageStop prevents pi from executing tools.
       // Guard with streamEnded to avoid pushing done after an error was already pushed.
@@ -368,6 +394,11 @@ export function streamViaCli(
       }
       await relay?.stop();
     }
+    return false;
+  };
+
+  (async () => {
+    if (await attempt(false)) await attempt(true);
   })();
 
   return stream;
