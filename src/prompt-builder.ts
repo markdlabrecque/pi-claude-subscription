@@ -338,6 +338,21 @@ export function buildPrompt(context: {
 }
 
 /**
+ * Describe the first block in the final user message that cannot reach Claude
+ * (anything but text and image), or null if there is none. Rejecting it up
+ * front keeps attachments from being dropped silently.
+ */
+export function findUnsupportedAttachment(messages: any[]): string | null {
+  const index = findFinalUserMessageIndex(messages);
+  const content = index >= 0 ? messages[index].content : undefined;
+  if (!Array.isArray(content)) return null;
+  const block = content.find((b) => b.type !== "text" && b.type !== "image");
+  return block
+    ? `"${block.type}" attachments are not supported by pi-claude-subscription; only text and images can be sent.`
+    : null;
+}
+
+/**
  * Find the index of the last user message in the messages array.
  * Returns -1 if no user message found.
  */
