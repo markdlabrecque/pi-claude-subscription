@@ -10,6 +10,19 @@ import { delimiter, join } from "node:path";
 
 export * from "./fake-upstream";
 
+/** The pi model the provider is driven with in tests. */
+export const model: any = {
+  id: "claude-sonnet-4-5",
+  name: "Claude Sonnet 4.5",
+  api: "anthropic-messages",
+  provider: "pi-claude-subscription",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  contextWindow: 200000,
+  maxTokens: 8192,
+};
+
 /** Write a CLI session file under `home`, as the fake claude reads it. */
 export function writeSession(home: string, id: string, content: string): void {
   const dir = join(home, ".claude", "sessions");

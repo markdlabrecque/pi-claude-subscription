@@ -154,6 +154,17 @@ function recordProcessTree() {
 }
 
 async function run(userMessage) {
+  // FAKE_CLAUDE_NOT_LOGGED_IN=1: no stored login, so no request is sent. The
+  // real CLI reports this as an error result and exits non-zero.
+  if (process.env.FAKE_CLAUDE_NOT_LOGGED_IN) {
+    emit({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Not logged in \u00b7 Please run /login",
+    });
+    process.exit(1);
+  }
   recordProcessTree();
   const context = [
     claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
@@ -166,7 +177,7 @@ async function run(userMessage) {
     ...(flag("--tools") === "" ? [] : BUILT_IN_TOOLS),
     ...(await mcpToolNames()),
   ];
-  const res = await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
+  const request = {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -191,8 +202,17 @@ async function run(userMessage) {
         },
       ],
     }),
-  });
+  };
+  const url = `${process.env.ANTHROPIC_BASE_URL}/v1/messages`;
+  let res = await fetch(url, request);
+  // Like the real CLI, retry a server error once; the relay rejects the retry.
+  if (res.status >= 500) res = await fetch(url, request);
   const reply = await res.json();
+  if (process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST) {
+    // Fail with this stderr text once the request is sent (a mid-turn crash).
+    process.stderr.write(process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST + "\n");
+    process.exit(1);
+  }
   if (!res.ok) {
     // The real CLI reports an API failure on stderr and exits non-zero.
     process.stderr.write(`API Error: ${res.status} ${JSON.stringify(reply)}\n`);

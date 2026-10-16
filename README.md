@@ -40,10 +40,7 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 ## Known limits
 
-- One pi turn can still trigger more than one request to Anthropic. The CLI sometimes attempts extra generations.
-- Claude Code settings on the host (CLAUDE.md, memory, skills, hooks, plugins) may leak into requests.
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
-- A tool call for a tool that was not offered can fail the turn.
 - Images in the latest user message are passed through. Other attachment types (for example documents) are rejected with an error, and images in earlier turns become a text placeholder.
 - Extensions that edit the raw API request cannot be detected, so no warning is logged. Pi 0.52 has no request-edit hook; its only raw-request surface, the `onPayload` and `headers` stream options, is not set by Pi itself. Such edits have no effect, because the request is built by the Claude CLI.
 - Native Windows is not supported. On Windows, use WSL.

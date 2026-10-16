@@ -6,19 +6,8 @@ import {
   type FakeUpstream,
   type FakeClaude,
   type Scenario,
+  model,
 } from "./harness";
-
-const model: any = {
-  id: "claude-sonnet-4-5",
-  name: "Claude Sonnet 4.5",
-  api: "anthropic-messages",
-  provider: "pi-claude-subscription",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
 
 let upstream: FakeUpstream | undefined;
 let claude: FakeClaude | undefined;

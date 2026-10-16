@@ -1,5 +1,5 @@
 import type { NdjsonMessage } from "./types";
-import { DEBUG_ENV, isDebugEnabled } from "./debug-log";
+import { DEBUG_ENV, isDebugEnabled } from "./debug-log.js";
 
 /**
  * Parse a single NDJSON line from Claude CLI stdout into a typed message.

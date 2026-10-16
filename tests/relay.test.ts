@@ -6,19 +6,9 @@ import {
   installFakeClaude,
   type FakeUpstream,
   type FakeClaude,
+  type Scenario,
+  model,
 } from "./harness";
-
-const model: any = {
-  id: "claude-sonnet-4-5",
-  name: "Claude Sonnet 4.5",
-  api: "anthropic-messages",
-  provider: "pi-claude-subscription",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
 
 let upstream: FakeUpstream | undefined;
 let claude: FakeClaude | undefined;
@@ -27,6 +17,7 @@ let relays: Relay[] = [];
 afterEach(async () => {
   claude?.restore();
   delete process.env.FAKE_CLAUDE_EXTRA_GENERATIONS;
+  delete process.env.FAKE_CLAUDE_NOT_LOGGED_IN;
   await Promise.all(relays.map((r) => r.stop()));
   await upstream?.close();
   claude = upstream = undefined;
@@ -119,7 +110,7 @@ describe("relay in a Pi turn", () => {
 });
 
 describe("upstream errors in a Pi turn", () => {
-  async function runTurn(scenario: "401" | "429") {
+  async function runTurn(scenario: Scenario) {
     upstream = await startFakeUpstream([scenario]);
     claude = installFakeClaude(upstream.url);
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -140,6 +131,31 @@ describe("upstream errors in a Pi turn", () => {
       /rate.?limit|too many|\b(429|5\d\d)\b/i,
     );
     expect(upstream!.requests).toHaveLength(1);
+  });
+
+  it.each([
+    ["503", "Claude API returned 503."],
+    ["529", "Claude API returned 529 (overloaded)."],
+  ] as const)(
+    "%s names the status instead of the relay's one-request rejection",
+    async (scenario, text) => {
+      const message = await runTurn(scenario);
+
+      expect(message.stopReason).toBe("error");
+      expect(message.errorMessage).toBe(text);
+      expect(message.errorMessage).not.toContain("only one");
+    },
+  );
+
+  it("a CLI with no login ends with the same non-retryable auth error, without any request", async () => {
+    process.env.FAKE_CLAUDE_NOT_LOGGED_IN = "1";
+
+    const message = await runTurn("normal");
+
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toContain("claude auth login");
+    expect(message.errorMessage).not.toMatch(/rate.?limit|too many|\b5\d\d\b/i);
+    expect(upstream!.requests).toHaveLength(0);
   });
 
   it("429 ends with a rate-limit error that keeps retry-after, so Pi retries", async () => {

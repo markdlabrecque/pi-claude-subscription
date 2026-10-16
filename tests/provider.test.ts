@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
@@ -69,7 +78,24 @@ vi.mock("@mariozechner/pi-ai", () => ({
 }));
 
 import spawn from "cross-spawn";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { streamViaCli } from "../src/provider";
+
+// The mocked process never emits "close", so spawnClaude's private temp
+// directories are never removed. Keep them in a sandbox this file deletes.
+const realTmpdir = process.env.TMPDIR;
+let tmpSandbox: string;
+beforeAll(() => {
+  tmpSandbox = mkdtempSync(join(tmpdir(), "provider-test-"));
+  process.env.TMPDIR = tmpSandbox;
+});
+afterAll(() => {
+  if (realTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = realTmpdir;
+  rmSync(tmpSandbox, { recursive: true, force: true });
+});
 
 describe("provider registration (default export)", () => {
   it("registers provider with ID pi-claude-subscription", async () => {
@@ -1159,7 +1185,7 @@ describe("streamViaCli", () => {
   });
 
   describe("abort signal already aborted", () => {
-    it("kills subprocess immediately when signal is already aborted", async () => {
+    it("ends the stream without spawning when signal is already aborted", async () => {
       const model = mockModels[0] as any;
       const context = {
         messages: [{ role: "user", content: "Hello" }],
@@ -1167,15 +1193,14 @@ describe("streamViaCli", () => {
       const controller = new AbortController();
       controller.abort(); // Abort BEFORE calling streamViaCli
 
-      streamViaCli(model, context, { signal: controller.signal });
+      const stream = streamViaCli(model, context, {
+        signal: controller.signal,
+      }) as any;
       await vi.advanceTimersByTimeAsync(0);
 
-      const proc = (spawn as any).mock.results[0].value;
-      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
-
-      // Clean up
-      proc.stdout.end();
-      await vi.advanceTimersByTimeAsync(100);
+      expect(spawn).not.toHaveBeenCalled();
+      expect(stream.end).toHaveBeenCalledTimes(1);
+      expect(stream._events.at(-1).type).toBe("done");
     });
   });
 

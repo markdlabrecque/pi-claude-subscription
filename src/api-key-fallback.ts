@@ -14,14 +14,14 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
+import { envFlag } from "./env-flag.js";
 
 export const API_KEY_FALLBACK_ENV = "PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK";
 
 export function isApiKeyFallbackEnabled(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  const value = env[API_KEY_FALLBACK_ENV]?.toLowerCase();
-  return value === "1" || value === "true";
+  return envFlag(API_KEY_FALLBACK_ENV, env);
 }
 
 /** Stream a request through pi's Anthropic provider using ANTHROPIC_API_KEY. */

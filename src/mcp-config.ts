@@ -5,10 +5,14 @@
  * and generates an MCP config that points to the schema-only MCP server.
  */
 
-import { writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+
+const SCHEMAS_PREFIX = "pi-claude-mcp-schemas-";
+const CONFIG_PREFIX = "pi-claude-mcp-config-";
 
 /** A Pi tool definition with MCP-compatible schema. */
 export interface McpToolDef {
@@ -41,7 +45,7 @@ export function getToolDefs(pi: any): McpToolDef[] {
 /**
  * Write MCP config and tool schemas to temp files.
  *
- * Creates two temp files:
+ * Creates two temp files, unique per call, for removeMcpConfig to delete:
  * 1. Schema file: JSON array of tool definitions
  * 2. Config file: MCP config pointing to the schema-only server
  *
@@ -49,11 +53,10 @@ export function getToolDefs(pi: any): McpToolDef[] {
  * @returns Path to the MCP config file
  */
 export function writeMcpConfig(toolDefs: McpToolDef[]): string {
+  const id = `${process.pid}-${randomUUID()}`;
+
   // Write tool schemas to temp file
-  const schemaFilePath = join(
-    tmpdir(),
-    `pi-claude-mcp-schemas-${process.pid}.json`,
-  );
+  const schemaFilePath = join(tmpdir(), `${SCHEMAS_PREFIX}${id}.json`);
   writeFileSync(schemaFilePath, JSON.stringify(toolDefs));
 
   // Resolve path to the schema server .cjs file (sibling of this module)
@@ -72,11 +75,25 @@ export function writeMcpConfig(toolDefs: McpToolDef[]): string {
   };
 
   // Write config to temp file
-  const configFilePath = join(
-    tmpdir(),
-    `pi-claude-mcp-config-${process.pid}.json`,
-  );
+  const configFilePath = join(tmpdir(), `${CONFIG_PREFIX}${id}.json`);
   writeFileSync(configFilePath, JSON.stringify(config));
 
   return configFilePath;
+}
+
+/**
+ * Remove the files writeMcpConfig made for this config path. Paths that
+ * writeMcpConfig did not produce are left alone.
+ */
+export function removeMcpConfig(configFilePath: string): void {
+  const name = basename(configFilePath);
+  if (!name.startsWith(CONFIG_PREFIX)) return;
+  rmSync(configFilePath, { force: true });
+  rmSync(
+    join(
+      dirname(configFilePath),
+      SCHEMAS_PREFIX + name.slice(CONFIG_PREFIX.length),
+    ),
+    { force: true },
+  );
 }

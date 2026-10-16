@@ -3,25 +3,15 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { streamViaCli } from "../src/provider";
+import { writeMcpConfig } from "../src/mcp-config";
 import {
   startFakeUpstream,
   installFakeClaude,
   type FakeUpstream,
   type FakeClaude,
   type Scenario,
+  model,
 } from "./harness";
-
-const model: any = {
-  id: "claude-sonnet-4-5",
-  name: "Claude Sonnet 4.5",
-  api: "anthropic-messages",
-  provider: "pi-claude-subscription",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
 
 const ENV_KEYS = [
   "TMPDIR",
@@ -73,7 +63,7 @@ async function runTurn(
   const stream = streamViaCli(
     model,
     { messages: [{ role: "user", content: "Say hello", timestamp: 1 }] },
-    { signal: controller.signal },
+    { signal: controller.signal, mcpConfigPath: writeMcpConfig([]) },
   );
   if (afterStart) {
     await vi.waitFor(() => expect(upstream!.requests).toHaveLength(1));
@@ -89,9 +79,8 @@ async function expectNothingLeft() {
   await vi.waitFor(() => {
     for (const pid of record.pids) expect(isAlive(pid)).toBe(false);
     expect(
-      readdirSync(sandbox).filter((d) =>
-        d.startsWith("pi-claude-subscription-"),
-      ),
+      // Private working directories and MCP config files
+      readdirSync(sandbox).filter((d) => d.startsWith("pi-claude-")),
     ).toEqual([]);
   });
   await expect(fetch(record.baseUrl)).rejects.toThrow();

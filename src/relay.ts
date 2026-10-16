@@ -27,22 +27,26 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { AddressInfo, Socket } from "node:net";
-import { isDebugEnabled } from "./debug-log";
+import { isDebugEnabled } from "./debug-log.js";
 
-/** An upstream response the user has to act on or wait out. */
+/** The first failed upstream response (any status of 400 or above). */
 export interface UpstreamFailure {
-  status: 401 | 429;
+  status: number;
   /** The retry-after header, as sent. */
   retryAfter?: string;
 }
 
 /**
  * The error text Pi shows. A 429 says "rate limit", which Pi's retry matcher
- * recognises, and keeps retry-after. A 401 avoids every retry keyword.
+ * recognises, and keeps retry-after. A 401 avoids every retry keyword. Any
+ * other status is named, so a 5xx reads as the server error it is.
  */
 export function describeFailure(failure: UpstreamFailure): string {
   if (failure.status === 401) {
     return "Claude authentication failed. Run `claude auth login`, then try again.";
+  }
+  if (failure.status !== 429) {
+    return `Claude API returned ${failure.status}${failure.status === 529 ? " (overloaded)" : ""}.`;
   }
   return failure.retryAfter
     ? `Claude rate limit reached; retry after ${failure.retryAfter}s.`
@@ -56,7 +60,7 @@ export interface Relay {
   readonly upstreamCount: number;
   /** Messages requests rejected locally. */
   readonly rejectedCount: number;
-  /** Set when upstream answered 401 or 429. */
+  /** Set when upstream answered with an error status. */
   readonly failure: UpstreamFailure | undefined;
   /** Close the server and drop open connections. Safe to call twice. */
   stop(): Promise<void>;
@@ -124,9 +128,9 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
         log(
           `relay POST ${req.url?.split("?")[0]} -> upstream status=${up.statusCode} upstream=${upstreamCount} rejected=${rejectedCount}`,
         );
-        if (up.statusCode === 401 || up.statusCode === 429) {
+        if (up.statusCode !== undefined && up.statusCode >= 400) {
           const retryAfter = up.headers["retry-after"];
-          failure = {
+          failure ??= {
             status: up.statusCode,
             ...(typeof retryAfter === "string" && { retryAfter }),
           };
