@@ -195,6 +195,19 @@ describe("writeMcpConfig", () => {
     expect(result).toMatch(/pi-claude-mcp-config/);
     expect(result).toMatch(/\.json$/);
   });
+
+  it("removes the schema file and rethrows when the config write fails", () => {
+    mocks.writeFileSync
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("ENOSPC");
+      });
+
+    expect(() => writeMcpConfig([])).toThrow("ENOSPC");
+
+    const schemasPath = mocks.writeFileSync.mock.calls[0][0];
+    expect(mocks.rmSync).toHaveBeenCalledWith(schemasPath, { force: true });
+  });
 });
 
 describe("removeMcpConfig", () => {
