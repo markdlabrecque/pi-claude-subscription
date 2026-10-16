@@ -22,6 +22,7 @@ import {
 } from "@mariozechner/pi-ai";
 import {
   buildPrompt,
+  buildReplayPrompt,
   buildSystemPrompt,
   buildResumePrompt,
   findUnsupportedAttachment,
@@ -39,6 +40,7 @@ import { createEventBridge } from "./event-bridge.js";
 import { startRelay, describeFailure, type Relay } from "./relay.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
+import { getSessionMode } from "./session-mode.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
 
@@ -98,22 +100,23 @@ export function streamViaCli(
         return;
       }
 
-      // Resume if pi provides a session ID AND this isn't the first turn.
-      // Pi passes sessionId on every call (including first), but we can only
-      // --resume a CLI session that already exists on disk from a prior turn.
+      // Replay (default) rebuilds the full history into one stateless call.
+      // Resume reuses a CLI session, but only once one exists on disk: pi
+      // passes sessionId on every call (including first), so the first turn
+      // creates the session and later turns --resume it.
+      const replay = getSessionMode() === "replay";
       const resumeSessionId =
-        options?.sessionId && context.messages.length > 1
+        !replay && options?.sessionId && context.messages.length > 1
           ? options.sessionId
           : undefined;
 
-      // Build prompt: if resuming, only send the latest user turn;
-      // otherwise build the full flattened conversation history
-      const prompt = resumeSessionId
-        ? buildResumePrompt(context)
-        : buildPrompt(context);
-      const systemPrompt = resumeSessionId
-        ? undefined
-        : buildSystemPrompt(context, cwd);
+      // When resuming, only send the latest user turn
+      const prompt = replay
+        ? buildReplayPrompt(context)
+        : resumeSessionId
+          ? buildResumePrompt(context)
+          : buildPrompt(context);
+      const systemPrompt = buildSystemPrompt(context, cwd, replay);
 
       // Compute effort level from reasoning options
       const effort = mapThinkingEffort(
@@ -131,7 +134,9 @@ export function streamViaCli(
         effort,
         mcpConfigPath: options?.mcpConfigPath,
         resumeSessionId,
-        newSessionId: !resumeSessionId ? options?.sessionId : undefined,
+        newSessionId:
+          !replay && !resumeSessionId ? options?.sessionId : undefined,
+        stateless: replay,
         baseUrl: relay.url,
       });
       const getStderr = captureStderr(proc);

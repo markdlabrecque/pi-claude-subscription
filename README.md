@@ -6,7 +6,7 @@ This is a fork of [rchern/pi-claude-cli](https://github.com/rchern/pi-claude-cli
 
 ## How it works
 
-The extension registers a custom pi provider, `pi-claude-subscription`. Each request spawns a `claude -p` subprocess using the stream-json wire protocol, with `--resume` on follow-up turns to reuse the CLI's session state instead of replaying full history. Claude proposes tool calls, pi executes them natively. Custom pi tools are exposed to Claude via a schema-only MCP server.
+The extension registers a custom pi provider, `pi-claude-subscription`. Each request spawns a `claude -p` subprocess using the stream-json wire protocol, and by default rebuilds the full Pi history into that one call (`replay`), so no CLI session state is needed. `resume` mode reuses the CLI's session with `--resume` instead. Claude proposes tool calls, pi executes them natively. Custom pi tools are exposed to Claude via a schema-only MCP server.
 
 ## Requirements
 
@@ -34,13 +34,14 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 - Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
+- Session mode: `PI_CLAUDE_SUBSCRIPTION_SESSION_MODE=replay|resume`, default `replay`. `replay` sends the whole history, including tool calls and results, as one text block per message and leaves no CLI session state, so a session can finish in a fresh container. `resume` sends only the new turn and uses `--resume` on the CLI session files on disk. It is read on every request; there is no fallback yet if a resumed session is missing.
 - Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request, and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive.
 
 ## Known limits
 
 - One pi turn can still trigger more than one request to Anthropic. The CLI sometimes attempts extra generations.
 - Claude Code settings on the host (CLAUDE.md, memory, skills, hooks, plugins) may leak into requests.
-- `--resume` depends on CLI session files on the local disk, so it does not survive throwaway containers.
+- `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
 - A tool call for a tool that was not offered can fail the turn.
 - Images in the latest user message are passed through. Other attachment types (for example documents) are rejected with an error, and images in earlier turns become a text placeholder.
 - Extensions that edit the raw API request cannot be detected, so no warning is logged. Pi 0.52 has no request-edit hook; its only raw-request surface, the `onPayload` and `headers` stream options, is not set by Pi itself. Such edits have no effect, because the request is built by the Claude CLI.
