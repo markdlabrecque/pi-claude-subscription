@@ -39,6 +39,7 @@ import {
   registerProcess,
   killAllProcesses,
   onTerminalSignal,
+  installSignalCleanup,
 } from "../src/process-manager";
 
 describe("spawnClaude", () => {
@@ -595,6 +596,33 @@ describe("terminal signal cleanup", () => {
 
     expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
     expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("keeps cleaning up on later signals when an app handler owns shutdown", () => {
+    const EventEmitter = require("node:events");
+    const before = process.listeners("SIGTERM");
+    const appHandler = vi.fn();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    process.on("SIGTERM", appHandler);
+    installSignalCleanup();
+    try {
+      for (const pid of [4343, 4444]) {
+        const proc = new EventEmitter();
+        proc.pid = pid;
+        proc.killed = false;
+        proc.exitCode = null;
+        proc.kill = vi.fn();
+        registerProcess(proc as unknown as ChildProcess);
+        process.emit("SIGTERM");
+        expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+      }
+      expect(appHandler).toHaveBeenCalledTimes(2);
+      expect(kill).not.toHaveBeenCalledWith(process.pid, "SIGTERM");
+    } finally {
+      for (const l of process.listeners("SIGTERM")) {
+        if (!before.includes(l)) process.removeListener("SIGTERM", l);
+      }
+    }
   });
 });
 

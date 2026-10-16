@@ -217,13 +217,19 @@ export function onTerminalSignal(signal: NodeJS.Signals): void {
 }
 
 /**
- * Register one-shot handlers for terminal signals. Each handler is removed
- * before it runs, so the re-raise in onTerminalSignal reaches the default action.
+ * Register cleanup for terminal signals. Each handler is removed before it
+ * runs, so the re-raise in onTerminalSignal reaches the default action. When
+ * an app handler still owns shutdown, cleanup is re-armed for the next signal.
  */
 export function installSignalCleanup(): void {
-  for (const signal of TERMINAL_SIGNALS) {
-    process.once(signal, () => onTerminalSignal(signal));
-  }
+  for (const signal of TERMINAL_SIGNALS) armSignal(signal);
+}
+
+function armSignal(signal: NodeJS.Signals): void {
+  process.once(signal, () => {
+    onTerminalSignal(signal);
+    if (process.listenerCount(signal) > 0) armSignal(signal);
+  });
 }
 
 /**
