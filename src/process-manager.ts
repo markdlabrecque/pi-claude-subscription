@@ -60,7 +60,7 @@ export function spawnClaude(
     // Claude CLI's --append-system-prompt accepts a file path or literal text.
     const tmpFile = join(
       tmpdir(),
-      `pi-claude-cli-sysprompt-${process.pid}.txt`,
+      `pi-claude-subscription-sysprompt-${process.pid}.txt`,
     );
     writeFileSync(tmpFile, systemPrompt, "utf-8");
     args.push("--append-system-prompt", tmpFile);
@@ -88,7 +88,9 @@ export function spawnClaude(
  */
 export function cleanupSystemPromptFile(): void {
   try {
-    unlinkSync(join(tmpdir(), `pi-claude-cli-sysprompt-${process.pid}.txt`));
+    unlinkSync(
+      join(tmpdir(), `pi-claude-subscription-sysprompt-${process.pid}.txt`),
+    );
   } catch {
     // File doesn't exist or already deleted — ignore
   }
@@ -210,7 +212,7 @@ export function validateCliAuth(): boolean {
     return true;
   } catch {
     console.warn(
-      "[pi-claude-cli] Claude CLI is not authenticated. " +
+      "[pi-claude-subscription] Claude CLI is not authenticated. " +
         "Run 'claude auth login' to authenticate.",
     );
     return false;
