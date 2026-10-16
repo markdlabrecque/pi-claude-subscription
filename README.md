@@ -33,6 +33,7 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 - Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
+- API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
 
 ## Known limits
 

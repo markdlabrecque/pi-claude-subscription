@@ -46,17 +46,6 @@ export function isCustomToolName(piName: string): boolean {
   return !BUILT_IN_PI_NAMES.has(piName);
 }
 
-/**
- * Check if a Claude tool name maps to a pi-known tool.
- * Returns true for built-in tools (Read, Write, etc.) and custom MCP tools (mcp__custom-tools__*).
- * Returns false for internal Claude Code tools (ToolSearch, Task, Agent, etc.) that pi cannot execute.
- * Used by event bridge to filter out internal tool calls.
- */
-export function isPiKnownClaudeTool(claudeName: string): boolean {
-  if (claudeName.startsWith(CUSTOM_TOOLS_MCP_PREFIX)) return true;
-  return claudeName.toLowerCase() in CLAUDE_TO_PI_NAME;
-}
-
 // Derived lookup maps
 
 /** Lowercase Claude name -> pi name */
@@ -84,17 +73,19 @@ for (const m of TOOL_MAPPINGS) {
 // Handle glob/find asymmetry: pi's "glob" also maps back to Claude's "Glob"
 PI_TO_CLAUDE_NAME["glob"] = "Glob";
 
+/** Any MCP server prefix, e.g. "mcp__custom-tools__" or "mcp__other__". */
+const MCP_PREFIX = /^mcp__.+?__/;
+
 /**
  * Map a Claude tool name to the corresponding pi tool name.
- * Strips the mcp__custom-tools__ prefix for custom tools first,
- * then falls back to case-insensitive built-in lookup.
- * Unknown tool names pass through unchanged.
+ * Strips any mcp__<server>__ prefix first, then falls back to
+ * case-insensitive built-in lookup. Never throws: unknown tool names
+ * pass through unchanged so pi's unknown-tool error drives self-correction.
  */
 export function mapClaudeToolNameToPi(claudeName: string): string {
-  // Strip custom-tools MCP prefix first (e.g., "mcp__custom-tools__deploy" -> "deploy")
-  if (claudeName.startsWith(CUSTOM_TOOLS_MCP_PREFIX)) {
-    return claudeName.slice(CUSTOM_TOOLS_MCP_PREFIX.length);
-  }
+  // e.g., "mcp__custom-tools__deploy" -> "deploy"
+  const bare = claudeName.replace(MCP_PREFIX, "");
+  if (bare !== claudeName) return bare;
   // Standard built-in tool mapping (case-insensitive)
   return CLAUDE_TO_PI_NAME[claudeName.toLowerCase()] ?? claudeName;
 }
