@@ -185,17 +185,48 @@ export function captureStderr(proc: ChildProcess): () => string {
   return () => buffer;
 }
 
+/** Tested Claude CLI range: `min` inclusive, `maxExclusive` exclusive. */
+export const TESTED_CLI_RANGE = { min: "2.1.0", maxExclusive: "2.2.0" };
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 /**
- * Validate that the Claude CLI is installed and on PATH.
+ * Validate that the Claude CLI is installed and on PATH, and warn once if its
+ * version is outside TESTED_CLI_RANGE.
  * Throws with install instructions if not found.
  */
 export function validateCliPresence(): void {
+  let output: string;
   try {
-    execSync("claude --version", { stdio: "pipe", timeout: 5000 });
+    output = execSync("claude --version", {
+      stdio: "pipe",
+      timeout: 5000,
+    }).toString();
   } catch {
     throw new Error(
       "Claude Code CLI not found. Install it: npm install -g @anthropic-ai/claude-code\n" +
         "Then authenticate: claude auth login",
+    );
+  }
+
+  const version = output.match(/\d+\.\d+\.\d+/)?.[0];
+  const { min, maxExclusive } = TESTED_CLI_RANGE;
+  if (
+    !version ||
+    compareVersions(version, min) < 0 ||
+    compareVersions(version, maxExclusive) >= 0
+  ) {
+    console.warn(
+      `[pi-claude-subscription] Claude CLI version ${version ?? output.trim()} is outside the tested range ` +
+        `(>=${min} <${maxExclusive}); behavior may differ.`,
     );
   }
 }

@@ -24,7 +24,7 @@ vi.mock("cross-spawn", () => ({
 
 // Mock child_process.execSync for validateCliPresence/validateCliAuth
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(() => Buffer.from("1.0.0")),
+  execSync: vi.fn(() => Buffer.from("2.1.301")),
 }));
 
 // Mock @mariozechner/pi-ai
