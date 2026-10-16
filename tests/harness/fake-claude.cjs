@@ -39,6 +39,23 @@ async function run(userMessage) {
   emit({ type: "system", subtype: "init", session_id: "fake-session" });
   event({ type: "message_start", message: { usage: reply.usage } });
   reply.content.forEach((block, index) => {
+    if (block.type === "tool_use") {
+      event({
+        type: "content_block_start",
+        index,
+        content_block: { type: "tool_use", id: block.id, name: block.name },
+      });
+      event({
+        type: "content_block_delta",
+        index,
+        delta: {
+          type: "input_json_delta",
+          partial_json: JSON.stringify(block.input),
+        },
+      });
+      event({ type: "content_block_stop", index });
+      return;
+    }
     event({
       type: "content_block_start",
       index,

@@ -6,6 +6,7 @@ export type Scenario =
   | "normal"
   | "tool_call"
   | "made_up_tool"
+  | "made_up_mcp_tool"
   | "401"
   | "429"
   | "hang";
@@ -91,6 +92,9 @@ export async function startFakeUpstream(
           break;
         case "made_up_tool":
           body = toolUse("totally_made_up_tool");
+          break;
+        case "made_up_mcp_tool":
+          body = toolUse("mcp__ghost-server__totally_made_up_tool");
           break;
         case "401":
           ({ status, body } = error("authentication_error", 401));

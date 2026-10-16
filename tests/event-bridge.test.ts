@@ -938,49 +938,8 @@ describe("createEventBridge", () => {
     });
   });
 
-  describe("internal Claude Code tools are filtered", () => {
-    it("skips ToolSearch tool_use blocks (not a pi-known tool)", () => {
-      const bridge = createBridgeWithStart();
-      bridge.handleEvent({
-        type: "content_block_start",
-        index: 0,
-        content_block: {
-          type: "tool_use",
-          id: "toolu_ts01",
-          name: "ToolSearch",
-        },
-      });
-
-      // No toolcall_start should be emitted
-      expect(stream.push).not.toHaveBeenCalled();
-      // No content added to output
-      expect(bridge.getOutput().content).toHaveLength(0);
-    });
-
-    it("skips Task, Agent, and other internal tools", () => {
-      const bridge = createBridgeWithStart();
-      for (const internalTool of [
-        "Task",
-        "TaskOutput",
-        "Agent",
-        "WebSearch",
-        "WebFetch",
-        "NotebookEdit",
-      ]) {
-        bridge.handleEvent({
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: `toolu_${internalTool}`,
-            name: internalTool,
-          },
-        });
-      }
-      expect(stream.push).not.toHaveBeenCalled();
-    });
-
-    it("allows built-in tools (Read, Write, etc.)", () => {
+  describe("built-in tools", () => {
+    it("emits built-in tools (Read, Write, etc.)", () => {
       const bridge = createBridgeWithStart();
       bridge.handleEvent({
         type: "content_block_start",
@@ -989,33 +948,6 @@ describe("createEventBridge", () => {
       });
       expect(stream.push).toHaveBeenCalledTimes(1);
       expect((stream.events[0] as any).type).toBe("toolcall_start");
-    });
-
-    it("silently drops deltas and stop events for filtered tools", () => {
-      const bridge = createBridgeWithStart();
-      // ToolSearch start (filtered)
-      bridge.handleEvent({
-        type: "content_block_start",
-        index: 0,
-        content_block: {
-          type: "tool_use",
-          id: "toolu_ts01",
-          name: "ToolSearch",
-        },
-      });
-      // Delta for filtered tool (should be ignored)
-      bridge.handleEvent({
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "input_json_delta", partial_json: '{"query":"test"}' },
-      });
-      // Stop for filtered tool (should be ignored)
-      bridge.handleEvent({
-        type: "content_block_stop",
-        index: 0,
-      });
-      // Nothing emitted
-      expect(stream.push).not.toHaveBeenCalled();
     });
   });
 

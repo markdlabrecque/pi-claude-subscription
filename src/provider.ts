@@ -38,7 +38,6 @@ import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
-import { isPiKnownClaudeTool } from "./tool-mapping.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
 
@@ -186,7 +185,7 @@ export function streamViaCli(
       }
 
       // Track tool_use blocks for break-early decision at message_stop
-      let sawBuiltInOrCustomTool = false;
+      let sawToolCall = false;
       // Guard against buffered readline lines firing after rl.close()
       let broken = false;
 
@@ -246,21 +245,13 @@ export function streamViaCli(
             msg.event.type === "content_block_start" &&
             msg.event.content_block?.type === "tool_use"
           ) {
-            const toolName = msg.event.content_block.name;
-            if (toolName && isPiKnownClaudeTool(toolName)) {
-              // Built-in tool (Read/Write/etc.) OR custom MCP tool (mcp__custom-tools__*)
-              // Internal Claude Code tools (ToolSearch, Task, etc.) are excluded
-              sawBuiltInOrCustomTool = true;
-            }
+            // Every tool call goes to pi, offered or not; pi reports unknown ones
+            sawToolCall = true;
           }
 
           // Break-early at message_stop: kill subprocess before CLI auto-executes tools
           // Only on top-level message_stop — sub-agent message_stop is internal
-          if (
-            isTopLevel &&
-            msg.event.type === "message_stop" &&
-            sawBuiltInOrCustomTool
-          ) {
+          if (isTopLevel && msg.event.type === "message_stop" && sawToolCall) {
             broken = true; // Set guard BEFORE rl.close() to prevent buffered lines
             clearTimeout(inactivityTimer);
             // Pi will execute these tools. Kill subprocess to prevent CLI from executing them.
@@ -292,9 +283,8 @@ export function streamViaCli(
       if (!streamEnded) {
         const output = bridge.getOutput();
 
-        // If stopReason is toolUse but there are no pi-known tool calls in content,
-        // it means only user MCP tools were called (filtered by event bridge).
-        // Override to "stop" so pi doesn't try to execute non-existent tools.
+        // If stopReason is toolUse but there are no tool calls in content,
+        // override to "stop" so pi doesn't wait on tools that were never emitted.
         const piToolCalls = (output.content || []).filter(
           (c: any) => c.type === "toolCall",
         );

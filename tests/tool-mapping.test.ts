@@ -208,10 +208,8 @@ describe("tool-mapping", () => {
       expect(mapClaudeToolNameToPi("mcp__custom-tools__")).toBe("");
     });
 
-    it("does NOT strip other MCP server prefixes", () => {
-      expect(mapClaudeToolNameToPi("mcp__other-server__foo")).toBe(
-        "mcp__other-server__foo",
-      );
+    it("strips any other MCP server prefix", () => {
+      expect(mapClaudeToolNameToPi("mcp__other-server__foo")).toBe("foo");
     });
 
     it("built-in mappings still work alongside MCP prefix stripping", () => {
