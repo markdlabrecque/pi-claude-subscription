@@ -457,7 +457,7 @@ export function buildSystemPrompt(
   if (replay) {
     parts.push(
       "The conversation so far is given as <turn> blocks, oldest first. " +
-        "Reply as the assistant to the last user turn.",
+        "Reply as the assistant to the last turn: answer the last user turn, or if the last turn is a tool result, continue from that result.",
     );
   }
 
