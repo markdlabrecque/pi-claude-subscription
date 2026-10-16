@@ -73,6 +73,8 @@ export function spawnClaude(
   try {
     const proc = spawn("claude", [...args, ...isolation.args], {
       stdio: ["pipe", "pipe", "pipe"],
+      // Own process group, so the whole tree can be killed at once
+      detached: process.platform !== "win32",
       cwd: isolation.cwd,
       env: {
         ...process.env,
@@ -85,6 +87,8 @@ export function spawnClaude(
         }),
       },
     });
+    // Reap anything the CLI left running in its group
+    proc.once("exit", () => killProcessGroup(proc));
     proc.once("close", isolation.cleanup);
     proc.once("error", isolation.cleanup);
     return proc as ChildProcess;
@@ -119,15 +123,41 @@ export function writeUserMessage(
   proc.stdin!.write(JSON.stringify(message) + "\n");
 }
 
+/** Per-request timeout when the env var is unset or invalid: 10 minutes. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
+export const REQUEST_TIMEOUT_ENV = "PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS";
+
+/** Per-request timeout in ms; read on every request. */
+export function getRequestTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const value = Number(env[REQUEST_TIMEOUT_ENV]);
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+/** SIGKILL the process group the CLI leads (macOS/Linux). Ignores a gone group. */
+function killProcessGroup(proc: ChildProcess): void {
+  if (process.platform === "win32" || typeof proc.pid !== "number") return;
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    // Group already gone
+  }
+}
+
 /**
- * Force-kill a subprocess immediately via SIGKILL.
+ * Force-kill a subprocess and everything it started via SIGKILL.
  * No-ops if the process is already dead (killed or exited).
  * Cross-platform safe: Node.js treats SIGKILL as forceful termination on Windows.
  *
  * @param proc - The subprocess to force-kill
  */
 export function forceKillProcess(proc: ChildProcess): void {
-  if (proc.killed || proc.exitCode !== null) return;
+  if (proc.killed || proc.exitCode !== null || proc.signalCode) return;
+  killProcessGroup(proc);
   proc.kill("SIGKILL");
 }
 
