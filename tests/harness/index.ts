@@ -1,8 +1,21 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 export * from "./fake-upstream";
+
+/** Write a CLI session file under `home`, as the fake claude reads it. */
+export function writeSession(home: string, id: string, content: string): void {
+  const dir = join(home, ".claude", "sessions");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.jsonl`), content);
+}
 
 export interface FakeClaude {
   restore(): void;

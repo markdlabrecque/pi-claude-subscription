@@ -7,6 +7,8 @@ import { SESSION_MODE_ENV } from "../src/session-mode";
 import {
   startFakeUpstream,
   installFakeClaude,
+  writeSession,
+  NORMAL_TEXT,
   type FakeUpstream,
   type FakeClaude,
 } from "./harness";
@@ -60,25 +62,29 @@ afterEach(async () => {
   claude = upstream = home = undefined;
 });
 
-/** Run the last turn of the session in a fresh HOME with no session files. */
-async function lastTurn(mode?: string) {
+/**
+ * Run the last turn of the session in a fresh HOME. `session` is the content
+ * of the CLI session file already on disk; omit it for no file.
+ */
+async function lastTurn(mode?: string, session?: string) {
   upstream = await startFakeUpstream();
   claude = installFakeClaude(upstream.url);
   home = mkdtempSync(join(tmpdir(), "session-mode-home-"));
   process.env.HOME = home;
+  if (session !== undefined) writeSession(home, "pi-session-1", session);
   if (mode) process.env[SESSION_MODE_ENV] = mode;
   const stream = streamViaCli(model, { systemPrompt: "PI-PROMPT", messages }, {
     sessionId: "pi-session-1",
   } as any);
   for await (const _ of stream);
-  await stream.result();
+  const result = await stream.result();
   expect(upstream.requests).toHaveLength(1);
-  return upstream.requests[0].body as any;
+  return { body: upstream.requests[0].body as any, result };
 }
 
 describe("session mode", () => {
   it("replay is the default: full history, tool calls and results reach upstream with no CLI session state", async () => {
-    const body = await lastTurn();
+    const { body } = await lastTurn();
 
     expect(body.fake_args).not.toContain("--resume");
     expect(body.fake_args).not.toContain("--session-id");
@@ -102,10 +108,44 @@ describe("session mode", () => {
   });
 
   it("switching to resume is a config change: only the new turn is sent, with --resume", async () => {
-    const body = await lastTurn("resume");
+    const { body } = await lastTurn("resume", "{}\n");
 
     expect(body.fake_args).toContain("--resume");
     expect(JSON.stringify(body.messages)).toContain("Now summarise it");
     expect(JSON.stringify(body.messages)).not.toContain("NOTES-FILE-CONTENTS");
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["corrupt", "not json\n{broken"],
+  ])(
+    "resume falls back to replay for the turn when the session file is %s",
+    async (_name, session) => {
+      const { body, result } = await lastTurn("resume", session);
+
+      expect(body.fake_args).not.toContain("--resume");
+      expect(JSON.stringify(body.messages)).toContain("NOTES-FILE-CONTENTS");
+      expect(result.stopReason).toBe("stop");
+      expect(JSON.stringify(result.content)).toContain(NORMAL_TEXT);
+    },
+  );
+
+  it("resume works across turns: the first turn creates the session, the next resumes it", async () => {
+    upstream = await startFakeUpstream();
+    claude = installFakeClaude(upstream.url);
+    home = mkdtempSync(join(tmpdir(), "session-mode-home-"));
+    process.env.HOME = home;
+    process.env[SESSION_MODE_ENV] = "resume";
+    for (const turn of [messages.slice(0, 1), messages]) {
+      const stream = streamViaCli(model, { messages: turn }, {
+        sessionId: "pi-session-1",
+      } as any);
+      for await (const _ of stream);
+    }
+
+    const [first, second] = upstream.requests.map((r) => r.body as any);
+    expect(first.fake_args).toContain("--session-id");
+    expect(second.fake_args).toContain("--resume");
+    expect(JSON.stringify(second.messages)).not.toContain("NOTES-FILE");
   });
 });

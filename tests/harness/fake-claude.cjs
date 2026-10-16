@@ -93,6 +93,32 @@ function mcpToolNames() {
   ).then((names) => names.flat());
 }
 
+// Session files, as the real CLI keeps them on disk: --session-id creates one,
+// --resume needs a readable one. Otherwise it exits 1 with this message and
+// sends no request (same for a missing and an unreadable file).
+const sessionFile = (id) =>
+  path.join(os.homedir(), ".claude", "sessions", `${id}.jsonl`);
+if (flag("--session-id")) {
+  const file = sessionFile(flag("--session-id"));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ type: "user" }) + "\n");
+}
+if (flag("--resume")) {
+  const id = flag("--resume");
+  let ok = true;
+  try {
+    for (const line of fs.readFileSync(sessionFile(id), "utf-8").split("\n")) {
+      if (line) JSON.parse(line);
+    }
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    process.stderr.write(`No conversation found with session ID: ${id}\n`);
+    process.exit(1);
+  }
+}
+
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 const event = (e) => emit({ type: "stream_event", event: e });
 
