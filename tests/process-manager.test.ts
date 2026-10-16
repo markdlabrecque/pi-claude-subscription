@@ -91,6 +91,29 @@ describe("spawnClaude", () => {
     expect(readFileSync(file, "utf-8")).toBe("You are a helpful assistant.");
   });
 
+  it("keeps API keys and other providers out of the CLI's environment", () => {
+    const planted = {
+      ANTHROPIC_API_KEY: "sk-test",
+      ANTHROPIC_AUTH_TOKEN: "token",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+    };
+    Object.assign(process.env, planted);
+    try {
+      spawnClaude("claude-sonnet-4-5-20250929", undefined, {
+        baseUrl: "http://127.0.0.1:1",
+      });
+    } finally {
+      for (const key of Object.keys(planted)) delete process.env[key];
+    }
+    const env = (spawn as any).mock.calls[0][2].env;
+
+    for (const key of Object.keys(planted)) expect(env).not.toHaveProperty(key);
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:1");
+    expect(env.PATH).toBe(process.env.PATH);
+  });
+
   it("returns the spawned ChildProcess", () => {
     const proc = spawnClaude("claude-sonnet-4-5-20250929");
     expect(proc).toBeDefined();

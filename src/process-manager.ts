@@ -11,12 +11,16 @@ import { execSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createIsolation } from "./isolation.js";
 
+/** Credentials the CLI would prefer over the subscription login. */
+const STRIPPED_ENV = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+
 /**
  * Spawn a Claude CLI subprocess with all required flags for stream-json communication.
  *
  * @param modelId - The model ID to pass via --model flag
- * @param systemPrompt - Optional system prompt that replaces Claude Code's
- * @param options - Optional AbortSignal and effort level
+ * @param systemPrompt - Pi's system prompt; it always replaces Claude Code's
+ * (a minimal one stands in when empty)
+ * @param options - Abort signal, effort, MCP config, session ids, stateless mode and relay URL
  * @returns The spawned ChildProcess with piped stdin/stdout/stderr
  */
 export function spawnClaude(
@@ -71,13 +75,22 @@ export function spawnClaude(
   // Private temp cwd, removed once the process is gone (or if spawning fails)
   const isolation = createIsolation(systemPrompt);
   try {
+    // Keep the CLI on the subscription: no API key or other provider may
+    // switch it to API billing behind the relay's back.
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (STRIPPED_ENV.has(key) || key.startsWith("CLAUDE_CODE_USE_")) {
+        delete env[key];
+      }
+    }
+
     const proc = spawn("claude", [...args, ...isolation.args], {
       stdio: ["pipe", "pipe", "pipe"],
       // Own process group, so the whole tree can be killed at once
       detached: process.platform !== "win32",
       cwd: isolation.cwd,
       env: {
-        ...process.env,
+        ...env,
         ...isolation.env,
         ...(options?.baseUrl && {
           ANTHROPIC_BASE_URL: options.baseUrl,
@@ -100,7 +113,7 @@ export function spawnClaude(
 
 /**
  * Write a user message to the subprocess stdin as NDJSON.
- * Does NOT call stdin.end() -- stdin stays open for control_response in Phase 2.
+ * Does NOT call stdin.end() -- stdin stays open for control_response replies.
  *
  * Accepts both string (text-only prompt) and array (ContentBlock[] with images)
  * content. JSON.stringify handles both natively. The stream-json protocol

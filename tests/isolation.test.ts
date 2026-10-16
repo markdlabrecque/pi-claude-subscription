@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { spawn } from "node:child_process";
 import {
   existsSync,
+  readFileSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -10,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { streamViaCli } from "../src/provider";
+import { createIsolation } from "../src/isolation";
 import { writeMcpConfig } from "../src/mcp-config";
 import {
   startFakeUpstream,
@@ -17,19 +19,8 @@ import {
   type FakeUpstream,
   type FakeClaude,
   type Scenario,
+  model,
 } from "./harness";
-
-const model: any = {
-  id: "claude-sonnet-4-5",
-  name: "Claude Sonnet 4.5",
-  api: "anthropic-messages",
-  provider: "pi-claude-subscription",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
 
 const PI_PROMPT = "PI-SYSTEM-PROMPT-ONLY";
 const MARKERS = ["MARKER-CLAUDE-MD", "MARKER-SKILL", "MARKER-HOOK"];
@@ -90,6 +81,22 @@ async function run(scenario: Scenario = "normal") {
   await stream.result();
   return upstream.requests[0]?.body as any;
 }
+
+describe("system prompt replacement", () => {
+  it.each([undefined, ""])(
+    "still replaces Claude Code's prompt when Pi's prompt is %j",
+    (prompt) => {
+      const isolation = createIsolation(prompt);
+      try {
+        const file =
+          isolation.args[isolation.args.indexOf("--system-prompt-file") + 1];
+        expect(readFileSync(file, "utf-8").trim()).not.toBe("");
+      } finally {
+        isolation.cleanup();
+      }
+    },
+  );
+});
 
 describe("request isolation", () => {
   it("keeps host config out of the upstream request", async () => {

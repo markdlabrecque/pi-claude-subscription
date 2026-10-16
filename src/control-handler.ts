@@ -10,7 +10,7 @@
 
 import type { ClaudeControlRequest } from "./types";
 import { CUSTOM_TOOLS_MCP_PREFIX } from "./tool-mapping.js";
-import { isDebugEnabled } from "./debug-log";
+import { isDebugEnabled } from "./debug-log.js";
 
 export const TOOL_EXECUTION_DENIED_MESSAGE =
   "Tool execution is unavailable in this environment.";

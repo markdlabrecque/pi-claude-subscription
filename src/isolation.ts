@@ -24,6 +24,9 @@ export interface Isolation {
   cleanup(): void;
 }
 
+/** Stands in when Pi sends no prompt, so Claude Code's own never comes back. */
+const FALLBACK_SYSTEM_PROMPT = "You are a helpful assistant.";
+
 export function createIsolation(systemPrompt?: string): Isolation {
   const cwd = mkdtempSync(join(tmpdir(), "pi-claude-subscription-"));
   const cleanup = () => rmSync(cwd, { recursive: true, force: true });
@@ -37,12 +40,10 @@ export function createIsolation(systemPrompt?: string): Isolation {
       "--disable-slash-commands",
       "--strict-mcp-config",
     ];
-    if (systemPrompt) {
-      // A file avoids ENAMETOOLONG on Windows; it lives in the private dir.
-      const promptFile = join(cwd, "system-prompt.txt");
-      writeFileSync(promptFile, systemPrompt, "utf-8");
-      args.push("--system-prompt-file", promptFile);
-    }
+    // A file avoids ENAMETOOLONG on Windows; it lives in the private dir.
+    const promptFile = join(cwd, "system-prompt.txt");
+    writeFileSync(promptFile, systemPrompt || FALLBACK_SYSTEM_PROMPT, "utf-8");
+    args.push("--system-prompt-file", promptFile);
 
     return {
       cwd,

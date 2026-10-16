@@ -11,19 +11,8 @@ import {
   NORMAL_TEXT,
   type FakeUpstream,
   type FakeClaude,
+  model,
 } from "./harness";
-
-const model: any = {
-  id: "claude-sonnet-4-5",
-  name: "Claude Sonnet 4.5",
-  api: "anthropic-messages",
-  provider: "pi-claude-subscription",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
 
 const messages = [
   { role: "user", content: "Read notes.txt please", timestamp: 1 },
@@ -129,6 +118,19 @@ describe("session mode", () => {
       expect(JSON.stringify(result.content)).toContain(NORMAL_TEXT);
     },
   );
+
+  it("resume does not fall back to replay once a request has gone upstream", async () => {
+    process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST =
+      "No conversation found with session ID: pi-session-1";
+    try {
+      const { result } = await lastTurn("resume", "{}\n");
+
+      // lastTurn also asserts exactly one upstream request: no second attempt
+      expect(JSON.stringify(result.content)).toContain("No conversation found");
+    } finally {
+      delete process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST;
+    }
+  });
 
   it("resume works across turns: the first turn creates the session, the next resumes it", async () => {
     upstream = await startFakeUpstream();

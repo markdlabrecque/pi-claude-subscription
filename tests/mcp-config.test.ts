@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Hoist mock references so they survive vi.mock hoisting
 const mocks = vi.hoisted(() => ({
   writeFileSync: vi.fn(),
+  rmSync: vi.fn(),
   tmpdir: vi.fn(() => "/tmp"),
 }));
 
 // Mock node:fs writeFileSync to avoid disk I/O
 vi.mock("node:fs", () => ({
   writeFileSync: mocks.writeFileSync,
+  rmSync: mocks.rmSync,
 }));
 
 // Mock node:os tmpdir
@@ -16,7 +18,11 @@ vi.mock("node:os", () => ({
   tmpdir: mocks.tmpdir,
 }));
 
-import { getToolDefs, writeMcpConfig } from "../src/mcp-config";
+import {
+  getToolDefs,
+  writeMcpConfig,
+  removeMcpConfig,
+} from "../src/mcp-config";
 import type { McpToolDef } from "../src/mcp-config";
 
 describe("getToolDefs", () => {
@@ -188,5 +194,22 @@ describe("writeMcpConfig", () => {
 
     expect(result).toMatch(/pi-claude-mcp-config/);
     expect(result).toMatch(/\.json$/);
+  });
+});
+
+describe("removeMcpConfig", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("removes both files writeMcpConfig made, and nothing else", () => {
+    const configPath = writeMcpConfig([]);
+    const schemasPath = mocks.writeFileSync.mock.calls[0][0];
+
+    removeMcpConfig(configPath);
+    removeMcpConfig("/tmp/mcp-config.json");
+
+    const removed = mocks.rmSync.mock.calls.map((c) => c[0]);
+    expect(removed).toEqual([configPath, schemasPath]);
   });
 });

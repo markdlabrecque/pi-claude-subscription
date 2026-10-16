@@ -10,6 +10,8 @@ export type Scenario =
   | "custom_tool"
   | "401"
   | "429"
+  | "503"
+  | "529"
   | "hang";
 
 export interface RecordedRequest {
@@ -116,6 +118,12 @@ export async function startFakeUpstream(
         case "429":
           ({ status, body } = error("rate_limit_error", 429));
           headers["retry-after"] = "30";
+          break;
+        case "503":
+          ({ status, body } = error("api_error", 503));
+          break;
+        case "529":
+          ({ status, body } = error("overloaded_error", 529));
           break;
       }
       res.writeHead(status, headers);

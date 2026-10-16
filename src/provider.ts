@@ -2,16 +2,19 @@
  * Provider orchestration for bridging pi requests to the Claude CLI subprocess.
  *
  * streamViaCli is the core function that:
- * 1. Builds the prompt from conversation context
- * 2. Spawns a Claude CLI subprocess with correct flags
+ * 1. Builds the prompt from conversation context (replay or resume)
+ * 2. Starts a one-request relay and spawns an isolated Claude CLI subprocess
+ *    pointed at it
  * 3. Writes the user message to stdin as NDJSON
  * 4. Reads stdout line-by-line, parsing NDJSON
  * 5. Routes stream events through the event bridge to pi's stream
- * 6. Handles result/error messages and cleans up the subprocess
- * 7. Implements break-early: kills subprocess at message_stop when
- *    built-in or custom-tools MCP tool_use blocks are seen
- * 8. Hardened lifecycle: inactivity timeout, subprocess exit handler,
- *    streamEnded guard, abort via SIGKILL, process registry
+ * 6. Handles result/error messages, upstream and login failures, and cleans
+ *    up the subprocess, relay and MCP config file
+ * 7. Implements break-early: kills subprocess at message_stop when any
+ *    tool_use block was seen, so pi runs the tools
+ * 8. Hardened lifecycle: inactivity and per-request timeouts, subprocess exit
+ *    handler, streamEnded guard, abort via SIGKILL, process registry
+ * 9. Falls back from resume to replay when the session is gone
  */
 
 import { createInterface } from "node:readline";
@@ -38,12 +41,21 @@ import {
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
-import { startRelay, describeFailure, type Relay } from "./relay.js";
+import {
+  startRelay,
+  describeFailure,
+  type Relay,
+  type UpstreamFailure,
+} from "./relay.js";
+import { removeMcpConfig } from "./mcp-config.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 import { getSessionMode } from "./session-mode.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
+
+/** What the CLI reports as its result when no login is stored. */
+const NOT_LOGGED_IN = /Not logged in/i;
 
 /** What the CLI prints when `--resume` finds no readable session. */
 const SESSION_NOT_FOUND = /No conversation found with session ID/;
@@ -59,8 +71,8 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
  *
  * Orchestrates the full subprocess lifecycle: spawn, write prompt, parse NDJSON,
  * bridge events, handle result, and clean up. Implements break-early pattern:
- * at message_stop, if any built-in or custom-tools MCP tool was seen, kills
- * the subprocess before Claude CLI can auto-execute the tools.
+ * at message_stop, if any tool call was seen, kills the subprocess before
+ * Claude CLI can auto-execute the tools.
  *
  * Hardened with: inactivity timeout (180s), subprocess exit handler with stderr
  * surfacing, streamEnded guard against double errors, abort via SIGKILL, and
@@ -69,6 +81,7 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
  * @param model - The model to use (from pi's model catalog)
  * @param context - The conversation context with messages and system prompt
  * @param options - Optional cwd, abort signal, reasoning level, thinking budgets, and mcpConfigPath
+ * (a writeMcpConfig file, removed when the request ends)
  * @returns An AssistantMessageEventStream that receives bridged events
  */
 export function streamViaCli(
@@ -88,24 +101,37 @@ export function streamViaCli(
     let proc: ReturnType<typeof spawnClaude> | undefined;
     let abortHandler: (() => void) | undefined;
     let relay: Relay | undefined;
+    // The CLI refused to start a request because no login is stored
+    let notLoggedIn = false;
     let stopRequestTimer: (() => void) | undefined;
 
     try {
       const cwd = options?.cwd ?? process.cwd();
 
-      // Reject attachments the CLI path cannot carry, before spawning anything
-      const unsupported = findUnsupportedAttachment(context.messages);
-      if (unsupported) {
+      // End the stream before anything is spawned
+      const endWithoutCli = (text?: string) => {
         const output = createEventBridge(stream, model).getOutput();
         stream.push({
           type: "done",
           reason: "stop",
           message: {
             ...output,
-            content: [{ type: "text", text: `Error: ${unsupported}` }],
+            ...(text && { content: [{ type: "text", text }] }),
           },
         });
         stream.end();
+      };
+
+      // Pi already cancelled: nothing to start
+      if (options?.signal?.aborted) {
+        endWithoutCli();
+        return false;
+      }
+
+      // Reject attachments the CLI path cannot carry, before spawning anything
+      const unsupported = findUnsupportedAttachment(context.messages);
+      if (unsupported) {
+        endWithoutCli(`Error: ${unsupported}`);
         return false;
       }
 
@@ -162,6 +188,8 @@ export function streamViaCli(
       // Guard against double stream.end() and double error events.
       // First error path wins; subsequent ones are no-ops.
       let streamEnded = false;
+      // Set once break-early kills the subprocess; guards buffered readline lines
+      let broken = false;
 
       /**
        * End the stream with an error, using a "done" event instead of "error".
@@ -176,16 +204,18 @@ export function streamViaCli(
         if (streamEnded || broken) return;
         streamEnded = true;
         const output = bridge.getOutput();
-        if (relay?.failure) {
-          // Auth and rate-limit failures end as a real error, so Pi can retry
-          // the retryable one and stop on the other.
+        const failure: UpstreamFailure | undefined =
+          relay?.failure ?? (notLoggedIn ? { status: 401 } : undefined);
+        if (failure) {
+          // Upstream and login failures end as a real error, so Pi can retry
+          // the retryable ones and stop on the others.
           stream.push({
             type: "error",
             reason: "error",
             error: {
               ...output,
               stopReason: "error",
-              errorMessage: describeFailure(relay.failure),
+              errorMessage: describeFailure(failure),
             },
           } as any);
           stream.end();
@@ -238,18 +268,16 @@ export function streamViaCli(
           }
         };
 
-        if (options.signal.aborted) {
-          abortHandler();
-          return false;
-        }
-        options.signal.addEventListener("abort", abortHandler, { once: true });
+        // Aborted while the relay started: the kill closes stdout and ends the stream
+        if (options.signal.aborted) abortHandler();
+        else
+          options.signal.addEventListener("abort", abortHandler, {
+            once: true,
+          });
       }
 
       // Track tool_use blocks for break-early decision at message_stop
       let sawToolCall = false;
-      // Guard against buffered readline lines firing after rl.close()
-      let broken = false;
-
       // Set up readline for line-by-line NDJSON parsing
       const rl = createInterface({
         input: proc.stdout!,
@@ -279,8 +307,10 @@ export function streamViaCli(
       });
 
       // A resumed session that is gone or unreadable fails before any output
+      // and before any request upstream (a replay must not be a second one)
       const resumeLost = (stderr: string) =>
         !!resumeSessionId &&
+        relay?.upstreamCount === 0 &&
         SESSION_NOT_FOUND.test(stderr) &&
         !bridge.getOutput().content?.length;
 
@@ -330,7 +360,10 @@ export function streamViaCli(
         } else if (msg.type === "control_request") {
           handleControlRequest(msg, proc!.stdin!);
         } else if (msg.type === "result") {
-          if (msg.subtype === "error") {
+          if (msg.is_error && NOT_LOGGED_IN.test(msg.result ?? "")) {
+            notLoggedIn = true;
+            endStreamWithError(msg.result!);
+          } else if (msg.subtype === "error") {
             endStreamWithError(msg.error ?? "Unknown error from Claude CLI");
           }
           // For both success and error: clean up the subprocess
@@ -370,26 +403,12 @@ export function streamViaCli(
       if (!streamEnded) {
         const output = bridge.getOutput();
 
-        // If stopReason is toolUse but there are no tool calls in content,
-        // override to "stop" so pi doesn't wait on tools that were never emitted.
-        const piToolCalls = (output.content || []).filter(
-          (c: any) => c.type === "toolCall",
-        );
-        const effectiveReason =
-          output.stopReason === "toolUse" && piToolCalls.length === 0
-            ? "stop"
-            : output.stopReason;
-
         streamEnded = true;
         stream.push({
           type: "done",
-          reason:
-            effectiveReason === "toolUse"
-              ? "toolUse"
-              : effectiveReason === "length"
-                ? "length"
-                : "stop",
-          message: { ...output, stopReason: effectiveReason },
+          // The bridge only ever sets these three
+          reason: output.stopReason as "stop" | "length" | "toolUse",
+          message: output,
         });
         stream.end();
       }
@@ -412,7 +431,12 @@ export function streamViaCli(
   };
 
   (async () => {
-    if (await attempt(false)) await attempt(true);
+    try {
+      if (await attempt(false)) await attempt(true);
+    } finally {
+      // The config file is made per request, and both attempts have used it
+      if (options?.mcpConfigPath) removeMcpConfig(options.mcpConfigPath);
+    }
   })();
 
   return stream;
