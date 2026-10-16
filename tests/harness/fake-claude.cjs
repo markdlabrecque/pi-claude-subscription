@@ -134,6 +134,8 @@ async function run(userMessage) {
       tools: tools.map((name) => ({ name })),
       // Where the CLI ran, so tests can check the directory is cleaned up.
       fake_cwd: process.cwd(),
+      // The CLI arguments, so tests can check for session flags.
+      fake_args: args,
       messages: [
         {
           ...userMessage.message,
