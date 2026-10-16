@@ -481,8 +481,11 @@ function userContentToText(content: string | any[]): string {
     } else if (block.type === "image") {
       texts.push("[An image was shared here but could not be included]");
       placeholderImageCount++;
+    } else {
+      console.warn(
+        `[pi-claude-subscription] a "${block.type}" attachment in conversation history could not be included in the prompt`,
+      );
     }
-    // Unknown block types silently skipped
   }
   return texts.join("\n");
 }
