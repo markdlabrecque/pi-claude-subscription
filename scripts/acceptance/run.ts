@@ -71,7 +71,8 @@ writeFileSync(spyLog, "");
 
 // Imported after the environment is set up (static imports would run first).
 const { streamViaCli } = await import("../../src/provider.js");
-const { writeMcpConfig } = await import("../../src/mcp-config.js");
+const { writeMcpConfig, removeMcpConfig } =
+  await import("../../src/mcp-config.js");
 
 const model: any = {
   id: "haiku",
@@ -193,71 +194,75 @@ const strip = ({ message: _m, ...rest }: TurnRecord) => rest;
 
 async function runTurns(target: number) {
   const mcp = writeMcpConfig(toolDefs);
-  const system =
-    "Follow the tool instructions exactly. One tool call per reply.";
-  const messages: any[] = [
-    {
-      role: "user",
-      content:
-        'Call step with n=1. After each result, make the call it says to make next. When it says DONE, reply "finished".',
-      timestamp: Date.now(),
-    },
-  ];
-  const records: TurnRecord[] = [];
-  let calls = 0;
+  try {
+    const system =
+      "Follow the tool instructions exactly. One tool call per reply.";
+    const messages: any[] = [
+      {
+        role: "user",
+        content:
+          'Call step with n=1. After each result, make the call it says to make next. When it says DONE, reply "finished".',
+        timestamp: Date.now(),
+      },
+    ];
+    const records: TurnRecord[] = [];
+    let calls = 0;
 
-  while (records.length < target + 3) {
-    const rec = await turn(messages, system, mcp);
-    records.push(rec);
-    console.log(
-      `turn ${records.length}: stop=${rec.stopReason} tools=[${rec.tools}] upstream=${rec.upstream} rejected=${rec.rejected} cliToolExec=${rec.cliToolExecutions} ${rec.ms}ms`,
-    );
-    messages.push(rec.message);
-    if (!rec.tools.length) break;
-    for (const call of rec.message.content.filter(
-      (c: any) => c.type === "toolCall",
-    )) {
-      calls++;
-      const next =
-        calls >= target
-          ? "DONE"
-          : calls % 5 === 0
-            ? `Next: call lookup with key="k${calls}".`
-            : `Next: call step with n=${calls + 1}.`;
-      messages.push(toolResult(call, next, Date.now()));
+    while (records.length < target + 3) {
+      const rec = await turn(messages, system, mcp);
+      records.push(rec);
+      console.log(
+        `turn ${records.length}: stop=${rec.stopReason} tools=[${rec.tools}] upstream=${rec.upstream} rejected=${rec.rejected} cliToolExec=${rec.cliToolExecutions} ${rec.ms}ms`,
+      );
+      messages.push(rec.message);
+      if (!rec.tools.length) break;
+      for (const call of rec.message.content.filter(
+        (c: any) => c.type === "toolCall",
+      )) {
+        calls++;
+        const next =
+          calls >= target
+            ? "DONE"
+            : calls % 5 === 0
+              ? `Next: call lookup with key="k${calls}".`
+              : `Next: call step with n=${calls + 1}.`;
+        messages.push(toolResult(call, next, Date.now()));
+      }
     }
-  }
 
-  const toolTurns = records.filter((r) => r.tools.length);
-  const last = records.at(-1)!;
-  const summary = {
-    mode: "turns",
-    requestedToolTurns: target,
-    toolTurns: toolTurns.length,
-    allToolTurnsOneUpstream: toolTurns.every((r) => r.upstream === 1),
-    totalUpstreamRequests: records.reduce((n, r) => n + r.upstream, 0),
-    upstreamStatuses: [...new Set(records.flatMap((r) => r.statuses))],
-    rejectedExtraRequests: records.reduce((n, r) => n + r.rejected, 0),
-    claudeCodeToolExecutions: spyEvents().filter(
-      (e) => e.kind === "tool_result",
-    ).length,
-    cliOutputMessagesSeen: spyEvents().length,
-    toolsUsed: [...new Set(records.flatMap((r) => r.tools))],
-    finalTurn: {
-      stop: last.stopReason,
-      text: last.text.slice(0, 80),
-      upstream: last.upstream,
-    },
-    inputTokens: records.reduce((n, r) => n + r.inputTokens, 0),
-    outputTokens: records.reduce((n, r) => n + r.outputTokens, 0),
-    pass:
-      toolTurns.length >= target &&
-      toolTurns.every((r) => r.upstream === 1 && r.rejected === 0) &&
-      spyEvents().every((e) => e.kind !== "tool_result") &&
-      last.upstream === 1 &&
-      !last.tools.length,
-  };
-  return { summary, records: records.map(strip) };
+    const toolTurns = records.filter((r) => r.tools.length);
+    const last = records.at(-1)!;
+    const summary = {
+      mode: "turns",
+      requestedToolTurns: target,
+      toolTurns: toolTurns.length,
+      allToolTurnsOneUpstream: toolTurns.every((r) => r.upstream === 1),
+      totalUpstreamRequests: records.reduce((n, r) => n + r.upstream, 0),
+      upstreamStatuses: [...new Set(records.flatMap((r) => r.statuses))],
+      rejectedExtraRequests: records.reduce((n, r) => n + r.rejected, 0),
+      claudeCodeToolExecutions: spyEvents().filter(
+        (e) => e.kind === "tool_result",
+      ).length,
+      cliOutputMessagesSeen: spyEvents().length,
+      toolsUsed: [...new Set(records.flatMap((r) => r.tools))],
+      finalTurn: {
+        stop: last.stopReason,
+        text: last.text.slice(0, 80),
+        upstream: last.upstream,
+      },
+      inputTokens: records.reduce((n, r) => n + r.inputTokens, 0),
+      outputTokens: records.reduce((n, r) => n + r.outputTokens, 0),
+      pass:
+        toolTurns.length >= target &&
+        toolTurns.every((r) => r.upstream === 1 && r.rejected === 0) &&
+        spyEvents().every((e) => e.kind !== "tool_result") &&
+        last.upstream === 1 &&
+        !last.tools.length,
+    };
+    return { summary, records: records.map(strip) };
+  } finally {
+    removeMcpConfig(mcp);
+  }
 }
 
 // 2. Cross-container replay --------------------------------------------------
@@ -283,74 +288,85 @@ const PROMPT =
 
 async function runStart(dir: string) {
   const mcp = writeMcpConfig(toolDefs);
-  const codes: Record<string, string> = {};
-  const messages: any[] = [
-    { role: "user", content: PROMPT, timestamp: Date.now() },
-  ];
-  const rec = await turn(messages, SYSTEM, mcp);
-  messages.push(rec.message);
-  for (const call of rec.message.content.filter(
-    (c: any) => c.type === "toolCall",
-  )) {
-    const key = String(call.arguments.key);
-    codes[key] =
-      `${key.toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-    messages.push(toolResult(call, codes[key], Date.now()));
+  try {
+    const codes: Record<string, string> = {};
+    const messages: any[] = [
+      { role: "user", content: PROMPT, timestamp: Date.now() },
+    ];
+    const rec = await turn(messages, SYSTEM, mcp);
+    messages.push(rec.message);
+    for (const call of rec.message.content.filter(
+      (c: any) => c.type === "toolCall",
+    )) {
+      const key = String(call.arguments.key);
+      codes[key] =
+        `${key.toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      messages.push(toolResult(call, codes[key], Date.now()));
+    }
+    writeFileSync(
+      join(dir, "history.json"),
+      JSON.stringify({ messages, codes }),
+    );
+    return {
+      summary: {
+        mode: "start",
+        turn: strip(rec),
+        keysIssued: Object.keys(codes),
+        cliFilesAfter: cliFiles(),
+        pass:
+          rec.stopReason === "toolUse" &&
+          rec.upstream === 1 &&
+          rec.rejected === 0,
+      },
+    };
+  } finally {
+    removeMcpConfig(mcp);
   }
-  writeFileSync(join(dir, "history.json"), JSON.stringify({ messages, codes }));
-  return {
-    summary: {
-      mode: "start",
-      turn: strip(rec),
-      keysIssued: Object.keys(codes),
-      cliFilesAfter: cliFiles(),
-      pass:
-        rec.stopReason === "toolUse" &&
-        rec.upstream === 1 &&
-        rec.rejected === 0,
-    },
-  };
 }
 
 async function runFinish(dir: string) {
   const filesBefore = cliFiles();
   const mcp = writeMcpConfig(toolDefs);
-  const { messages, codes } = JSON.parse(
-    readFileSync(join(dir, "history.json"), "utf-8"),
-  );
-  const records: TurnRecord[] = [];
-  for (let i = 0; i < 4; i++) {
-    const rec = await turn(messages, SYSTEM, mcp);
-    records.push(rec);
-    messages.push(rec.message);
-    if (!rec.tools.length) break;
-    for (const call of rec.message.content.filter(
-      (c: any) => c.type === "toolCall",
-    )) {
-      const key = String(call.arguments.key);
-      codes[key] ??=
-        `${key.toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-      messages.push(toolResult(call, codes[key], Date.now()));
+  try {
+    const { messages, codes } = JSON.parse(
+      readFileSync(join(dir, "history.json"), "utf-8"),
+    );
+    const records: TurnRecord[] = [];
+    for (let i = 0; i < 4; i++) {
+      const rec = await turn(messages, SYSTEM, mcp);
+      records.push(rec);
+      messages.push(rec.message);
+      if (!rec.tools.length) break;
+      for (const call of rec.message.content.filter(
+        (c: any) => c.type === "toolCall",
+      )) {
+        const key = String(call.arguments.key);
+        codes[key] ??=
+          `${key.toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        messages.push(toolResult(call, codes[key], Date.now()));
+      }
     }
+    const final = records.at(-1)!;
+    const alpha = (Object.entries(codes) as [string, string][]).find(([k]) =>
+      /alpha/i.test(k),
+    )?.[1];
+    return {
+      summary: {
+        mode: "finish",
+        turns: records.map(strip),
+        cliFilesBeforeFirstRequest: filesBefore,
+        cliFilesAfter: cliFiles(),
+        // The alpha code exists only in the history carried over from container A.
+        finalAnswerHasCodeFromA: !!alpha && final.text.includes(alpha),
+        pass:
+          !!alpha &&
+          final.text.includes(alpha) &&
+          records.every((r) => r.upstream === 1 && r.rejected === 0),
+      },
+    };
+  } finally {
+    removeMcpConfig(mcp);
   }
-  const final = records.at(-1)!;
-  const alpha = (Object.entries(codes) as [string, string][]).find(([k]) =>
-    /alpha/i.test(k),
-  )?.[1];
-  return {
-    summary: {
-      mode: "finish",
-      turns: records.map(strip),
-      cliFilesBeforeFirstRequest: filesBefore,
-      cliFilesAfter: cliFiles(),
-      // The alpha code exists only in the history carried over from container A.
-      finalAnswerHasCodeFromA: !!alpha && final.text.includes(alpha),
-      pass:
-        !!alpha &&
-        final.text.includes(alpha) &&
-        records.every((r) => r.upstream === 1 && r.rejected === 0),
-    },
-  };
 }
 
 // Main ---------------------------------------------------------------------
