@@ -925,6 +925,30 @@ describe("streamViaCli", () => {
       expect(doneEvent.message.content).toBeDefined();
     });
 
+    it("reports an error when subprocess is killed by a signal before any output", async () => {
+      const model = mockModels[0] as any;
+      const context = {
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      streamViaCli(model, context);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const proc = (spawn as any).mock.results[0].value;
+
+      // Killed by a signal: exit code is null and nothing was written
+      proc.stdout.end();
+      proc.emit("close", null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(100);
+
+      const mockStream = MockAssistantMessageEventStream.mock.instances[0];
+      const doneEvent = mockStream._events.find(
+        (e: any) => e.type === "done" && e.message,
+      );
+      expect(doneEvent).toBeDefined();
+      expect(JSON.stringify(doneEvent.message.content)).toContain("SIGKILL");
+    });
+
     it("does not push error on normal close (code 0)", async () => {
       const model = mockModels[0] as any;
       const context = {

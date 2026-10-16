@@ -190,6 +190,8 @@ export function streamViaCli(
       let streamEnded = false;
       // Set once break-early kills the subprocess; guards buffered readline lines
       let broken = false;
+      // Set once the CLI reports its result; a later kill is our own cleanup
+      let resultSeen = false;
 
       /**
        * End the stream with an error, using a "done" event instead of "error".
@@ -293,10 +295,19 @@ export function streamViaCli(
       });
 
       // Handle subprocess close -- surface crashes with stderr and exit code
-      proc.on("close", (code: number | null, _signal: string | null) => {
+      proc.on("close", (code: number | null, signal: string | null) => {
         clearTimeout(inactivityTimer);
         if (broken) return; // Break-early kill, expected
-        if (code !== 0 && code !== null) {
+        if (code === null) {
+          // Killed by a signal: not an abort or our own cleanup, so report it
+          if (resultSeen || options?.signal?.aborted) return;
+          const stderr = getStderr().trim();
+          endStreamWithError(
+            stderr || `Claude CLI was killed by signal ${signal ?? "unknown"}`,
+          );
+          return;
+        }
+        if (code !== 0) {
           const stderr = getStderr();
           if (resumeLost(stderr)) return; // The caller falls back to replay
           const message = stderr
@@ -360,6 +371,7 @@ export function streamViaCli(
         } else if (msg.type === "control_request") {
           handleControlRequest(msg, proc!.stdin!);
         } else if (msg.type === "result") {
+          resultSeen = true;
           if (msg.is_error && NOT_LOGGED_IN.test(msg.result ?? "")) {
             notLoggedIn = true;
             endStreamWithError(msg.result!);
@@ -379,15 +391,14 @@ export function streamViaCli(
       });
 
       // stdout can close before the exit code and stderr are in
-      if (
-        resumeSessionId &&
-        !streamEnded &&
-        !bridge.getOutput().content?.length
-      ) {
+      if (!streamEnded && !resultSeen && !bridge.getOutput().content?.length) {
         await new Promise<void>((resolve) =>
-          proc!.exitCode !== null ? resolve() : proc!.once("close", resolve),
+          proc!.exitCode !== null || proc!.signalCode != null
+            ? resolve()
+            : proc!.once("close", resolve),
         );
-        if (proc.exitCode !== 0 && resumeLost(getStderr())) return true;
+        if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr()))
+          return true;
       }
 
       // Push done event after readline closes (async). Pushing synchronously
