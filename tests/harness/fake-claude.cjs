@@ -135,7 +135,26 @@ process.stdin.on("data", (chunk) => {
   });
 });
 
+// FAKE_CLAUDE_RECORD_FILE=path: also start a child that shares our stdio (like
+// an MCP server would), and write the pids and base URL to that file so tests
+// can check everything is gone afterwards.
+function recordProcessTree() {
+  const file = process.env.FAKE_CLAUDE_RECORD_FILE;
+  if (!file) return;
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "inherit",
+  });
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      pids: [process.pid, child.pid],
+      baseUrl: process.env.ANTHROPIC_BASE_URL,
+    }),
+  );
+}
+
 async function run(userMessage) {
+  recordProcessTree();
   const context = [
     claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
     hookOutput("UserPromptSubmit"),
