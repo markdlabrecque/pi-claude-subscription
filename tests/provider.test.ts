@@ -1226,6 +1226,23 @@ describe("streamViaCli", () => {
       expect(stream.end).toHaveBeenCalledTimes(1);
       expect(stream._events.at(-1).type).toBe("done");
     });
+
+    it("does not spawn when aborted while the relay is starting", async () => {
+      const model = mockModels[0] as any;
+      const context = {
+        messages: [{ role: "user", content: "Hello" }],
+      };
+      const controller = new AbortController();
+
+      const stream = streamViaCli(model, context, {
+        signal: controller.signal,
+      }) as any;
+      controller.abort(); // Relay startup is still pending
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(stream._events.at(-1).type).toBe("done");
+    });
   });
 
   describe("MCP config with custom tool results", () => {

@@ -163,6 +163,12 @@ export function streamViaCli(
       // One-request relay between the CLI and Anthropic
       relay = await startRelay();
 
+      // Pi may have cancelled while the relay was starting: don't spawn
+      if (options?.signal?.aborted) {
+        endWithoutCli();
+        return false;
+      }
+
       // Spawn subprocess
       proc = spawnClaude(model.id, systemPrompt || undefined, {
         signal: options?.signal,
