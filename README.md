@@ -34,6 +34,7 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 - Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
+- Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request, and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive.
 
 ## Known limits
 
@@ -49,18 +50,18 @@ Measured with `claude` 2.1.301 on a Pro/Max login (ticket #2). A local logging p
 
 ### Host config flags
 
-| Piece | What turns it off | Notes |
-| --- | --- | --- |
-| Built-in tools | `--tools ""` | Also removes Skill and Agent. MCP tools stay unless `--strict-mcp-config`. Pi's own `read`/`write`/`edit`/`bash`/`grep`/`find` must then be advertised through the schema-only MCP server too (they arrive as `mcp__custom-tools__<name>`). |
-| User, project, local settings (hooks, env, permissions, agents, enabled plugins) | `--setting-sources ""` | `--settings <file>` stays active (a hook in it ran) and so do `--plugin-dir`, `--plugin-url`, `--agents`. Never pass them. Admin-managed settings are documented as still applying; not testable here. |
-| CLAUDE.md, CLAUDE.local.md, user CLAUDE.md | `--setting-sources ""` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` | Each worked alone. Set both. |
-| Memory | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | Removes the memory instructions and the memory path. `--system-prompt` also drops the instructions. |
-| Skills, slash commands | `--disable-slash-commands` | `--setting-sources ""` alone still lists bundled and built-in plugin skills. |
-| Hooks | `--setting-sources ""` | 8 hook events in the default run, 0 with the flag. |
-| Plugins | `--setting-sources ""` | Four built-in `cc-plugin-*` plugins still load. They add nothing to the request. |
-| MCP servers (`.mcp.json`, claude.ai connectors, plugin MCP) | `--strict-mcp-config` plus our own `--mcp-config` | Without it a default run offered 110+ connector tools. |
-| System prompt | `--system-prompt` | Replaces the default prompt, not appended. |
-| Title side request | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (or `--name x`) | See the relay note below. |
+| Piece                                                                            | What turns it off                                             | Notes                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Built-in tools                                                                   | `--tools ""`                                                  | Also removes Skill and Agent. MCP tools stay unless `--strict-mcp-config`. Pi's own `read`/`write`/`edit`/`bash`/`grep`/`find` must then be advertised through the schema-only MCP server too (they arrive as `mcp__custom-tools__<name>`). |
+| User, project, local settings (hooks, env, permissions, agents, enabled plugins) | `--setting-sources ""`                                        | `--settings <file>` stays active (a hook in it ran) and so do `--plugin-dir`, `--plugin-url`, `--agents`. Never pass them. Admin-managed settings are documented as still applying; not testable here.                                      |
+| CLAUDE.md, CLAUDE.local.md, user CLAUDE.md                                       | `--setting-sources ""` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` | Each worked alone. Set both.                                                                                                                                                                                                                |
+| Memory                                                                           | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`                           | Removes the memory instructions and the memory path. `--system-prompt` also drops the instructions.                                                                                                                                         |
+| Skills, slash commands                                                           | `--disable-slash-commands`                                    | `--setting-sources ""` alone still lists bundled and built-in plugin skills.                                                                                                                                                                |
+| Hooks                                                                            | `--setting-sources ""`                                        | 8 hook events in the default run, 0 with the flag.                                                                                                                                                                                          |
+| Plugins                                                                          | `--setting-sources ""`                                        | Four built-in `cc-plugin-*` plugins still load. They add nothing to the request.                                                                                                                                                            |
+| MCP servers (`.mcp.json`, claude.ai connectors, plugin MCP)                      | `--strict-mcp-config` plus our own `--mcp-config`             | Without it a default run offered 110+ connector tools.                                                                                                                                                                                      |
+| System prompt                                                                    | `--system-prompt`                                             | Replaces the default prompt, not appended.                                                                                                                                                                                                  |
+| Title side request                                                               | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (or `--name x`)  | See the relay note below.                                                                                                                                                                                                                   |
 
 Unusable:
 
@@ -110,11 +111,11 @@ Keep each block's bytes stable between turns, and do not put a trailing instruct
 
 Four-turn Haiku session with 2 MCP tools. Tokens per turn, input side (uncached + cache write + cache read):
 
-| Mode | Per turn | Total | Cache read |
-| --- | --- | --- | --- |
-| `--resume` | 1031, 1078, 1352, 1634 | 5095 | 3062 |
-| Replay, one text blob | 1031, 1110, 1366, 1665 | 5172 | 686 |
-| Replay, one block per turn | 1089, 1131, 1455, 1701 | 5376 | 2638 |
+| Mode                       | Per turn               | Total | Cache read |
+| -------------------------- | ---------------------- | ----- | ---------- |
+| `--resume`                 | 1031, 1078, 1352, 1634 | 5095  | 3062       |
+| Replay, one text blob      | 1031, 1110, 1366, 1665 | 5172  | 686        |
+| Replay, one block per turn | 1089, 1131, 1455, 1701 | 5376  | 2638       |
 
 Counts are about equal, but a text blob re-bills the whole history as cache writes each turn. Weighting 1h cache writes 2x and cache reads 0.1x (API list ratios; subscription metering is unknown), the blob costs about 2.1x resume and per-turn blocks about 1.3x. The gap grows with history length. Output tokens varied from 233 to 2596 for the same prompt, so they are left out of the comparison.
 
