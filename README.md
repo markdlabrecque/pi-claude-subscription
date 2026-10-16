@@ -33,6 +33,7 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 - Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
+- Request timeout: a request is stopped after 10 minutes by default. Set `PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS` to a number of milliseconds to change it (invalid or non-positive values use the default). It is read on every request. On timeout, or when Pi cancels, the whole CLI process tree is killed (process group on macOS/Linux), and the temp directory and relay port are released.
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
 - Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request, and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive.
 

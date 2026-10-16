@@ -33,6 +33,7 @@ import {
   captureStderr,
   forceKillProcess,
   registerProcess,
+  getRequestTimeoutMs,
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
@@ -78,6 +79,7 @@ export function streamViaCli(
     let proc: ReturnType<typeof spawnClaude> | undefined;
     let abortHandler: (() => void) | undefined;
     let relay: Relay | undefined;
+    let stopRequestTimer: (() => void) | undefined;
 
     try {
       const cwd = options?.cwd ?? process.cwd();
@@ -204,6 +206,17 @@ export function streamViaCli(
           );
         }, INACTIVITY_TIMEOUT_MS);
       }
+
+      // Per-request timeout: kill the whole process tree, then end as usual
+      const requestTimeoutMs = getRequestTimeoutMs();
+      const requestTimer = setTimeout(() => {
+        forceKillProcess(proc!);
+        endStreamWithError(
+          `Claude CLI request timed out after ${requestTimeoutMs / 1000} seconds`,
+        );
+      }, requestTimeoutMs);
+      requestTimer.unref();
+      stopRequestTimer = () => clearTimeout(requestTimer);
 
       // Set up abort signal handler -- uses SIGKILL for immediate force-kill
       if (options?.signal) {
@@ -357,6 +370,7 @@ export function streamViaCli(
       } as any);
       stream.end();
     } finally {
+      stopRequestTimer?.();
       // Clean up abort listener
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);

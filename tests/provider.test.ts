@@ -17,7 +17,6 @@ vi.mock("cross-spawn", () => ({
     (proc as any).kill = vi.fn(() => {
       (proc as any).killed = true;
     });
-    (proc as any).pid = 99999;
     return proc;
   }),
 }));
