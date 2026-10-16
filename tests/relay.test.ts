@@ -117,3 +117,36 @@ describe("relay in a Pi turn", () => {
     expect(logs.join("\n")).not.toContain("fake-oauth-token");
   });
 });
+
+describe("upstream errors in a Pi turn", () => {
+  async function runTurn(scenario: "401" | "429") {
+    upstream = await startFakeUpstream([scenario]);
+    claude = installFakeClaude(upstream.url);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const stream = streamViaCli(model, {
+      messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
+    });
+    for await (const _ of stream);
+    return (await stream.result()) as any;
+  }
+
+  it("401 ends with one error telling the user to run claude auth login, not a retryable one", async () => {
+    const message = await runTurn("401");
+
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toContain("claude auth login");
+    // Pi retries messages that look like rate limits or server errors.
+    expect(message.errorMessage).not.toMatch(
+      /rate.?limit|too many|\b(429|5\d\d)\b/i,
+    );
+    expect(upstream!.requests).toHaveLength(1);
+  });
+
+  it("429 ends with a rate-limit error that keeps retry-after, so Pi retries", async () => {
+    const message = await runTurn("429");
+
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toMatch(/rate limit/i);
+    expect(message.errorMessage).toContain("30");
+  });
+});

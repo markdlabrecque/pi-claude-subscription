@@ -38,6 +38,11 @@ async function run(userMessage) {
     }),
   });
   const reply = await res.json();
+  if (!res.ok) {
+    // The real CLI reports an API failure on stderr and exits non-zero.
+    process.stderr.write(`API Error: ${res.status} ${JSON.stringify(reply)}\n`);
+    process.exit(1);
+  }
 
   // FAKE_CLAUDE_EXTRA_GENERATIONS=n: try n more generations, as the real CLI
   // would when it runs a tool and continues the turn.

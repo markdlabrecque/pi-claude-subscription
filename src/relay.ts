@@ -28,6 +28,26 @@ import {
 import { request as httpsRequest } from "node:https";
 import type { AddressInfo, Socket } from "node:net";
 
+/** An upstream response the user has to act on or wait out. */
+export interface UpstreamFailure {
+  status: 401 | 429;
+  /** The retry-after header, as sent. */
+  retryAfter?: string;
+}
+
+/**
+ * The error text Pi shows. A 429 says "rate limit", which Pi's retry matcher
+ * recognises, and keeps retry-after. A 401 avoids every retry keyword.
+ */
+export function describeFailure(failure: UpstreamFailure): string {
+  if (failure.status === 401) {
+    return "Claude authentication failed. Run `claude auth login`, then try again.";
+  }
+  return failure.retryAfter
+    ? `Claude rate limit reached; retry after ${failure.retryAfter}s.`
+    : "Claude rate limit reached.";
+}
+
 export interface Relay {
   /** Base URL for ANTHROPIC_BASE_URL, e.g. http://127.0.0.1:41234 */
   url: string;
@@ -35,6 +55,8 @@ export interface Relay {
   readonly upstreamCount: number;
   /** Messages requests rejected locally. */
   readonly rejectedCount: number;
+  /** Set when upstream answered 401 or 429. */
+  readonly failure: UpstreamFailure | undefined;
   /** Close the server and drop open connections. Safe to call twice. */
   stop(): Promise<void>;
 }
@@ -84,6 +106,7 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
 
   let upstreamCount = 0;
   let rejectedCount = 0;
+  let failure: UpstreamFailure | undefined;
   const sockets = new Set<Socket>();
 
   function forward(req: IncomingMessage, res: ServerResponse): void {
@@ -100,6 +123,13 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
         log(
           `relay POST ${req.url?.split("?")[0]} -> upstream status=${up.statusCode} upstream=${upstreamCount} rejected=${rejectedCount}`,
         );
+        if (up.statusCode === 401 || up.statusCode === 429) {
+          const retryAfter = up.headers["retry-after"];
+          failure = {
+            status: up.statusCode,
+            ...(typeof retryAfter === "string" && { retryAfter }),
+          };
+        }
         res.writeHead(up.statusCode ?? 502, up.headers);
         up.pipe(res);
       },
@@ -171,6 +201,9 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
     },
     get rejectedCount() {
       return rejectedCount;
+    },
+    get failure() {
+      return failure;
     },
     stop: () =>
       new Promise<void>((resolve) => {
