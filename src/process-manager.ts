@@ -31,6 +31,8 @@ export function spawnClaude(
     mcpConfigPath?: string;
     resumeSessionId?: string;
     newSessionId?: string;
+    /** Relay base URL; the CLI sends its API traffic here. */
+    baseUrl?: string;
   },
 ): ChildProcess {
   const args = [
@@ -77,6 +79,15 @@ export function spawnClaude(
   const proc = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: options?.cwd ?? process.cwd(),
+    env: options?.baseUrl
+      ? {
+          ...process.env,
+          ANTHROPIC_BASE_URL: options.baseUrl,
+          // Suppresses the Haiku session-title request, so the relay's first
+          // Messages request is the real one.
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        }
+      : undefined,
   });
 
   return proc as ChildProcess;
