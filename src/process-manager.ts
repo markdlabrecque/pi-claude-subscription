@@ -199,6 +199,33 @@ export function killAllProcesses(): void {
   activeProcesses.clear();
 }
 
+/** Signals that end pi without running 'exit' listeners. */
+const TERMINAL_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
+
+/**
+ * Kill every registered CLI tree, then re-raise the signal so pi still exits.
+ * The re-raise only happens when nothing else is listening for the signal,
+ * so an app-level handler keeps control of its own shutdown.
+ *
+ * @param signal - The terminal signal pi received
+ */
+export function onTerminalSignal(signal: NodeJS.Signals): void {
+  killAllProcesses();
+  if (process.listenerCount(signal) === 0) {
+    process.kill(process.pid, signal);
+  }
+}
+
+/**
+ * Register one-shot handlers for terminal signals. Each handler is removed
+ * before it runs, so the re-raise in onTerminalSignal reaches the default action.
+ */
+export function installSignalCleanup(): void {
+  for (const signal of TERMINAL_SIGNALS) {
+    process.once(signal, () => onTerminalSignal(signal));
+  }
+}
+
 /**
  * Force-kill the subprocess after a 500ms grace period.
  * The Claude CLI hangs after emitting the result message (known bug).

@@ -38,6 +38,7 @@ import {
   forceKillProcess,
   registerProcess,
   killAllProcesses,
+  onTerminalSignal,
 } from "../src/process-manager";
 
 describe("spawnClaude", () => {
@@ -567,6 +568,33 @@ describe("process registry", () => {
     proc3.exitCode = null;
     killAllProcesses();
     expect(proc3.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal signal cleanup", () => {
+  beforeEach(() => {
+    killAllProcesses();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("kills the CLI process group when pi gets a terminal signal", () => {
+    const EventEmitter = require("node:events");
+    const proc = new EventEmitter();
+    proc.pid = 4242;
+    proc.killed = false;
+    proc.exitCode = null;
+    proc.kill = vi.fn();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    registerProcess(proc as unknown as ChildProcess);
+    onTerminalSignal("SIGTERM");
+
+    expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
+    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
   });
 });
 

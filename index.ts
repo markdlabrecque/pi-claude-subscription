@@ -12,6 +12,7 @@ import {
   validateCliPresence,
   validateCliAuth,
   killAllProcesses,
+  installSignalCleanup,
 } from "./src/process-manager.js";
 import {
   isApiKeyFallbackEnabled,
@@ -25,6 +26,8 @@ import {
 
 // Kill all active Claude subprocesses on process exit to prevent orphans
 process.on("exit", killAllProcesses);
+// Signal deaths skip 'exit', so the CLI groups are also reaped on terminal signals
+installSignalCleanup();
 
 const PROVIDER_ID = "pi-claude-subscription";
 
