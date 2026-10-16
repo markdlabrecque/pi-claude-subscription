@@ -1,5 +1,5 @@
 /**
- * Pi extension entry point for pi-claude-cli.
+ * Pi extension entry point for pi-claude-subscription.
  *
  * Registers a custom provider that routes LLM calls through the Claude Code CLI
  * subprocess using stream-json NDJSON protocol.
@@ -18,7 +18,7 @@ import { getCustomToolDefs, writeMcpConfig } from "./src/mcp-config.js";
 // Kill all active Claude subprocesses on process exit to prevent orphans
 process.on("exit", killAllProcesses);
 
-const PROVIDER_ID = "pi-claude-cli";
+const PROVIDER_ID = "pi-claude-subscription";
 
 let mcpConfigPath: string | undefined;
 let mcpConfigResolved = false;
@@ -53,12 +53,12 @@ function ensureMcpConfig(pi: ExtensionAPI): string | undefined {
     if (toolDefs.length > 0) {
       mcpConfigPath = writeMcpConfig(toolDefs);
       console.error(
-        `[pi-claude-cli] MCP config generated with ${toolDefs.length} custom tool(s)`,
+        `[pi-claude-subscription] MCP config generated with ${toolDefs.length} custom tool(s)`,
       );
     }
   } catch (err) {
     console.warn(
-      "[pi-claude-cli] MCP config generation failed, custom tools unavailable:",
+      "[pi-claude-subscription] MCP config generation failed, custom tools unavailable:",
       err,
     );
   }
@@ -81,6 +81,19 @@ export default function (pi: ExtensionAPI) {
       maxTokens: model.maxTokens,
     }));
 
+    // The pi-ai catalog may predate Fable; the CLI accepts it by alias.
+    if (!models.some((m) => m.id.includes("fable"))) {
+      models.push({
+        id: "fable",
+        name: "Claude Fable",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      });
+    }
+
     // Ensure all registered tools are active so pi can execute them.
     // Some tools (find, grep, ls) are registered but not activated by default.
     pi.on("session_start", async () => {
@@ -91,9 +104,9 @@ export default function (pi: ExtensionAPI) {
     });
 
     pi.registerProvider(PROVIDER_ID, {
-      baseUrl: "pi-claude-cli",
+      baseUrl: "pi-claude-subscription",
       apiKey: "unused",
-      api: "pi-claude-cli",
+      api: "pi-claude-subscription",
       models,
       streamSimple: (model, context, options) => {
         const configPath = ensureMcpConfig(pi);
@@ -104,6 +117,6 @@ export default function (pi: ExtensionAPI) {
       },
     });
   } catch (err) {
-    console.error(`[pi-claude-cli] Failed to register provider:`, err);
+    console.error(`[pi-claude-subscription] Failed to register provider:`, err);
   }
 }

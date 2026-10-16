@@ -73,7 +73,7 @@ import spawn from "cross-spawn";
 import { streamViaCli } from "../src/provider";
 
 describe("provider registration (default export)", () => {
-  it("registers provider with ID pi-claude-cli", async () => {
+  it("registers provider with ID pi-claude-subscription", async () => {
     const registerProvider = vi.fn();
     const mockPi = { registerProvider, on: vi.fn() } as any;
 
@@ -82,7 +82,7 @@ describe("provider registration (default export)", () => {
     mod.default(mockPi);
 
     expect(registerProvider).toHaveBeenCalledTimes(1);
-    expect(registerProvider.mock.calls[0][0]).toBe("pi-claude-cli");
+    expect(registerProvider.mock.calls[0][0]).toBe("pi-claude-subscription");
   });
 
   it("registers provider with correct config shape", async () => {
@@ -93,9 +93,9 @@ describe("provider registration (default export)", () => {
     mod.default(mockPi);
 
     const config = registerProvider.mock.calls[0][1];
-    expect(config.baseUrl).toBe("pi-claude-cli");
+    expect(config.baseUrl).toBe("pi-claude-subscription");
     expect(config.apiKey).toBe("unused");
-    expect(config.api).toBe("pi-claude-cli");
+    expect(config.api).toBe("pi-claude-subscription");
     expect(config.models).toBeDefined();
     expect(Array.isArray(config.models)).toBe(true);
     expect(config.streamSimple).toBeDefined();
@@ -118,6 +118,19 @@ describe("provider registration (default export)", () => {
     expect(firstModel.contextWindow).toBe(200000);
     expect(firstModel.maxTokens).toBe(8192);
     expect(firstModel.cost).toBeDefined();
+  });
+
+  it("lists a Fable model when the pi-ai catalog has none", async () => {
+    const registerProvider = vi.fn();
+    const mockPi = { registerProvider, on: vi.fn() } as any;
+
+    const mod = await import("../index");
+    mod.default(mockPi);
+
+    const ids: string[] = registerProvider.mock.calls[0][1].models.map(
+      (m: any) => m.id,
+    );
+    expect(ids.filter((id) => id.includes("fable"))).toHaveLength(1);
   });
 });
 
