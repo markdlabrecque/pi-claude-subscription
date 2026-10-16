@@ -318,7 +318,7 @@ describe("captureStderr", () => {
 
 describe("validateCliPresence", () => {
   it("does not throw when claude --version succeeds", () => {
-    (execSync as any).mockReturnValue(Buffer.from("1.0.0"));
+    (execSync as any).mockReturnValue(Buffer.from("2.1.301"));
     expect(() => validateCliPresence()).not.toThrow();
   });
 
@@ -335,6 +335,38 @@ describe("validateCliPresence", () => {
       expect(e.message).toContain("npm install");
     }
   });
+});
+
+describe("CLI version check", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn for a version inside the tested range", () => {
+    (execSync as any).mockReturnValue(Buffer.from("2.1.301 (Claude Code)\n"));
+    validateCliPresence();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["2.0.9", "2.2.0", "3.0.0"])(
+    "warns once for version %s outside the tested range",
+    (version) => {
+      (execSync as any).mockReturnValue(
+        Buffer.from(`${version} (Claude Code)\n`),
+      );
+      validateCliPresence();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`CLI version ${version}`),
+      );
+    },
+  );
 });
 
 describe("validateCliAuth", () => {
