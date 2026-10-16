@@ -37,6 +37,7 @@ import {
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
+import { startRelay, type Relay } from "./relay.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
@@ -77,6 +78,7 @@ export function streamViaCli(
   (async () => {
     let proc: ReturnType<typeof spawnClaude> | undefined;
     let abortHandler: (() => void) | undefined;
+    let relay: Relay | undefined;
 
     try {
       const cwd = options?.cwd ?? process.cwd();
@@ -121,6 +123,9 @@ export function streamViaCli(
         options?.thinkingBudgets,
       );
 
+      // One-request relay between the CLI and Anthropic
+      relay = await startRelay();
+
       // Spawn subprocess
       proc = spawnClaude(model.id, systemPrompt || undefined, {
         cwd,
@@ -129,6 +134,7 @@ export function streamViaCli(
         mcpConfigPath: options?.mcpConfigPath,
         resumeSessionId,
         newSessionId: !resumeSessionId ? options?.sessionId : undefined,
+        baseUrl: relay.url,
       });
       const getStderr = captureStderr(proc);
 
@@ -336,6 +342,7 @@ export function streamViaCli(
         options.signal.removeEventListener("abort", abortHandler);
       }
       cleanupSystemPromptFile();
+      await relay?.stop();
     }
   })();
 

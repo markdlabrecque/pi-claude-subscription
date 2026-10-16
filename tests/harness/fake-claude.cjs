@@ -27,7 +27,10 @@ process.stdin.on("data", (chunk) => {
 async function run(userMessage) {
   const res = await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer fake-oauth-token",
+    },
     body: JSON.stringify({
       model,
       max_tokens: 1024,
@@ -35,6 +38,20 @@ async function run(userMessage) {
     }),
   });
   const reply = await res.json();
+
+  // FAKE_CLAUDE_EXTRA_GENERATIONS=n: try n more generations, as the real CLI
+  // would when it runs a tool and continues the turn.
+  for (
+    let i = 0;
+    i < Number(process.env.FAKE_CLAUDE_EXTRA_GENERATIONS ?? 0);
+    i++
+  ) {
+    await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: 1024, messages: [] }),
+    });
+  }
 
   emit({ type: "system", subtype: "init", session_id: "fake-session" });
   event({ type: "message_start", message: { usage: reply.usage } });
