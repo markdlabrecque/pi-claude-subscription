@@ -37,7 +37,7 @@ import {
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
-import { startRelay, type Relay } from "./relay.js";
+import { startRelay, describeFailure, type Relay } from "./relay.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
@@ -164,6 +164,21 @@ export function streamViaCli(
         if (streamEnded || broken) return;
         streamEnded = true;
         const output = bridge.getOutput();
+        if (relay?.failure) {
+          // Auth and rate-limit failures end as a real error, so Pi can retry
+          // the retryable one and stop on the other.
+          stream.push({
+            type: "error",
+            reason: "error",
+            error: {
+              ...output,
+              stopReason: "error",
+              errorMessage: describeFailure(relay.failure),
+            },
+          } as any);
+          stream.end();
+          return;
+        }
         const errorMessage = {
           ...output,
           content: output.content?.length
@@ -303,6 +318,13 @@ export function streamViaCli(
       // Push done event after readline closes (async). Pushing synchronously
       // inside handleMessageStop prevents pi from executing tools.
       // Guard with streamEnded to avoid pushing done after an error was already pushed.
+      if (
+        !streamEnded &&
+        relay.failure &&
+        !bridge.getOutput().content?.length
+      ) {
+        endStreamWithError("");
+      }
       if (!streamEnded) {
         const output = bridge.getOutput();
 
