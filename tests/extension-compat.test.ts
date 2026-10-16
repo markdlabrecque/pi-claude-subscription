@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
 import { discoverAndLoadExtensions } from "@mariozechner/pi-coding-agent";
 import { streamViaCli } from "../src/provider";
-import { getCustomToolDefs } from "../src/mcp-config";
+import { getToolDefs } from "../src/mcp-config";
 import {
   startFakeUpstream,
   installFakeClaude,
@@ -58,7 +58,7 @@ describe("Pi extension compatibility", () => {
     expect(errors).toEqual([]);
     const tools = [...extensions[0].tools.values()].map((t) => t.definition);
     expect(
-      getCustomToolDefs({ getAllTools: () => tools }).map((t) => t.name),
+      getToolDefs({ getAllTools: () => tools }).map((t) => t.name),
     ).toEqual(["hello"]);
 
     upstream = await startFakeUpstream(["custom_tool", "normal"]);

@@ -1,7 +1,7 @@
 /**
- * Custom tool discovery and MCP config file generation.
+ * Tool discovery and MCP config file generation.
  *
- * Discovers non-built-in tools from pi, writes their schemas to a temp file,
+ * Discovers tools from pi, writes their schemas to a temp file,
  * and generates an MCP config that points to the schema-only MCP server.
  */
 
@@ -10,17 +10,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-/** The 6 built-in tools that pi handles natively (match pi tool names). */
-const BUILT_IN_TOOL_NAMES = new Set([
-  "read",
-  "write",
-  "edit",
-  "bash",
-  "grep",
-  "find",
-]);
-
-/** A custom tool definition with MCP-compatible schema. */
+/** A Pi tool definition with MCP-compatible schema. */
 export interface McpToolDef {
   name: string;
   description: string;
@@ -28,25 +18,24 @@ export interface McpToolDef {
 }
 
 /**
- * Get custom tool definitions from pi, filtering out built-in tools.
+ * Get every tool definition from pi. Claude Code's own tools are off, so Pi's
+ * built-in tools are served through the schema-only MCP server as well.
  *
  * @param pi - The pi ExtensionAPI instance
- * @returns Array of custom tool definitions (empty if all tools are built-in)
+ * @returns Array of tool definitions (empty if pi has none registered)
  */
-export function getCustomToolDefs(pi: any): McpToolDef[] {
+export function getToolDefs(pi: any): McpToolDef[] {
   const allTools = pi.getAllTools();
 
   if (!Array.isArray(allTools)) {
     return [];
   }
 
-  return allTools
-    .filter((tool: any) => !BUILT_IN_TOOL_NAMES.has(tool.name))
-    .map((tool: any) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.parameters,
-    }));
+  return allTools.map((tool: any) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.parameters,
+  }));
 }
 
 /**
@@ -56,7 +45,7 @@ export function getCustomToolDefs(pi: any): McpToolDef[] {
  * 1. Schema file: JSON array of tool definitions
  * 2. Config file: MCP config pointing to the schema-only server
  *
- * @param toolDefs - Array of custom tool definitions
+ * @param toolDefs - Array of tool definitions
  * @returns Path to the MCP config file
  */
 export function writeMcpConfig(toolDefs: McpToolDef[]): string {

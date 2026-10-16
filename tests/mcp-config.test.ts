@@ -16,103 +16,23 @@ vi.mock("node:os", () => ({
   tmpdir: mocks.tmpdir,
 }));
 
-import { getCustomToolDefs, writeMcpConfig } from "../src/mcp-config";
+import { getToolDefs, writeMcpConfig } from "../src/mcp-config";
 import type { McpToolDef } from "../src/mcp-config";
 
-describe("getCustomToolDefs", () => {
+describe("getToolDefs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("filters out all 6 built-in tools and returns only custom tools", () => {
+  it("includes Pi's built-in tools alongside custom ones", () => {
     const mockPi = {
       getAllTools: vi.fn(() => [
-        {
-          name: "read",
-          description: "Read file",
-          parameters: { type: "object" },
-        },
-        {
-          name: "write",
-          description: "Write file",
-          parameters: { type: "object" },
-        },
-        {
-          name: "edit",
-          description: "Edit file",
-          parameters: { type: "object" },
-        },
-        {
-          name: "bash",
-          description: "Run bash",
-          parameters: { type: "object" },
-        },
-        { name: "grep", description: "Search", parameters: { type: "object" } },
-        {
-          name: "find",
-          description: "Find files",
-          parameters: { type: "object" },
-        },
-        {
-          name: "search",
-          description: "Custom search tool",
-          parameters: {
-            type: "object",
-            properties: { query: { type: "string" } },
-          },
-        },
-        {
-          name: "deploy",
-          description: "Deploy app",
-          parameters: {
-            type: "object",
-            properties: { target: { type: "string" } },
-          },
-        },
+        { name: "read", description: "Read file", parameters: {} },
+        { name: "deploy", description: "Deploy app", parameters: {} },
       ]),
     };
 
-    const result = getCustomToolDefs(mockPi);
-
-    expect(result).toHaveLength(2);
-    expect(result[0].name).toBe("search");
-    expect(result[1].name).toBe("deploy");
-  });
-
-  it("returns empty array when all tools are built-in", () => {
-    const mockPi = {
-      getAllTools: vi.fn(() => [
-        {
-          name: "read",
-          description: "Read file",
-          parameters: { type: "object" },
-        },
-        {
-          name: "write",
-          description: "Write file",
-          parameters: { type: "object" },
-        },
-        {
-          name: "edit",
-          description: "Edit file",
-          parameters: { type: "object" },
-        },
-        {
-          name: "bash",
-          description: "Run bash",
-          parameters: { type: "object" },
-        },
-        { name: "grep", description: "Search", parameters: { type: "object" } },
-        {
-          name: "find",
-          description: "Find files",
-          parameters: { type: "object" },
-        },
-      ]),
-    };
-
-    const result = getCustomToolDefs(mockPi);
-    expect(result).toEqual([]);
+    expect(getToolDefs(mockPi).map((t) => t.name)).toEqual(["read", "deploy"]);
   });
 
   it("includes custom tool with correct name, description, inputSchema from parameters", () => {
@@ -135,7 +55,7 @@ describe("getCustomToolDefs", () => {
       ]),
     };
 
-    const result = getCustomToolDefs(mockPi);
+    const result = getToolDefs(mockPi);
 
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("custom_search");
@@ -148,7 +68,7 @@ describe("getCustomToolDefs", () => {
       getAllTools: vi.fn(() => []),
     };
 
-    const result = getCustomToolDefs(mockPi);
+    const result = getToolDefs(mockPi);
     expect(result).toEqual([]);
   });
 
@@ -157,7 +77,7 @@ describe("getCustomToolDefs", () => {
       getAllTools: vi.fn(() => undefined),
     };
 
-    const result = getCustomToolDefs(mockPi);
+    const result = getToolDefs(mockPi);
     expect(result).toEqual([]);
   });
 
@@ -166,7 +86,7 @@ describe("getCustomToolDefs", () => {
       getAllTools: vi.fn(() => null),
     };
 
-    const result = getCustomToolDefs(mockPi);
+    const result = getToolDefs(mockPi);
     expect(result).toEqual([]);
   });
 });

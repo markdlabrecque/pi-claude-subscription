@@ -17,7 +17,7 @@ import {
   isApiKeyFallbackEnabled,
   streamViaAnthropic,
 } from "./src/api-key-fallback.js";
-import { getCustomToolDefs, writeMcpConfig } from "./src/mcp-config.js";
+import { getToolDefs, writeMcpConfig } from "./src/mcp-config.js";
 
 // Kill all active Claude subprocesses on process exit to prevent orphans
 process.on("exit", killAllProcesses);
@@ -35,10 +35,10 @@ let mcpConfigResolved = false;
  * Only locks (sets mcpConfigResolved) when getAllTools() returns a
  * real array — if it returns undefined/null (registry not ready),
  * we retry on the next request. Once the registry is ready we
- * commit to the result even if there are zero custom tools.
+ * commit to the result even if there are zero tools.
  *
  * Uses warn-don't-block: failure logs a warning but does not
- * prevent the provider from functioning (built-ins still work).
+ * prevent the provider from functioning (without tools).
  */
 function ensureMcpConfig(pi: ExtensionAPI): string | undefined {
   if (mcpConfigResolved) return mcpConfigPath;
@@ -50,19 +50,19 @@ function ensureMcpConfig(pi: ExtensionAPI): string | undefined {
       return mcpConfigPath;
     }
 
-    // Registry is ready — lock regardless of whether custom tools exist
+    // Registry is ready — lock regardless of whether any tools exist
     mcpConfigResolved = true;
 
-    const toolDefs = getCustomToolDefs(pi);
+    const toolDefs = getToolDefs(pi);
     if (toolDefs.length > 0) {
       mcpConfigPath = writeMcpConfig(toolDefs);
       console.error(
-        `[pi-claude-subscription] MCP config generated with ${toolDefs.length} custom tool(s)`,
+        `[pi-claude-subscription] MCP config generated with ${toolDefs.length} tool(s)`,
       );
     }
   } catch (err) {
     console.warn(
-      "[pi-claude-subscription] MCP config generation failed, custom tools unavailable:",
+      "[pi-claude-subscription] MCP config generation failed, tools unavailable:",
       err,
     );
   }

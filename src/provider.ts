@@ -33,7 +33,6 @@ import {
   captureStderr,
   forceKillProcess,
   registerProcess,
-  cleanupSystemPromptFile,
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
@@ -128,7 +127,6 @@ export function streamViaCli(
 
       // Spawn subprocess
       proc = spawnClaude(model.id, systemPrompt || undefined, {
-        cwd,
         signal: options?.signal,
         effort,
         mcpConfigPath: options?.mcpConfigPath,
@@ -363,7 +361,6 @@ export function streamViaCli(
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);
       }
-      cleanupSystemPromptFile();
       await relay?.stop();
     }
   })();
