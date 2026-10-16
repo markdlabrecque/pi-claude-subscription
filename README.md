@@ -41,7 +41,7 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 ## Known limits
 
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
-- Images in the latest user message are passed through. Other attachment types (for example documents) are rejected with an error, and images in earlier turns become a text placeholder.
+- Images and documents in the latest user message are passed through. Other attachment types are rejected with an error. Images in earlier turns become a text placeholder, and documents in earlier turns are dropped with a warning.
 - Extensions that edit the raw API request cannot be detected, so no warning is logged. Pi 0.52 has no request-edit hook; its only raw-request surface, the `onPayload` and `headers` stream options, is not set by Pi itself. Such edits have no effect, because the request is built by the Claude CLI.
 - Native Windows is not supported. On Windows, use WSL.
 

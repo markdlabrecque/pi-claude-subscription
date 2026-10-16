@@ -4,7 +4,7 @@
  * Follows the reference project's buildPromptBlocks() pattern:
  * - USER: / ASSISTANT: / TOOL RESULT: labels
  * - Content blocks serialized by type
- * - Images in the final user message are translated to Anthropic API format (HIST-02)
+ * - Images and documents in the final user message are passed through to Anthropic API format (HIST-02)
  * - Images in non-final messages get placeholder text with console.warn
  */
 
@@ -18,7 +18,7 @@ import {
 } from "./tool-mapping.js";
 
 /**
- * Anthropic API content block types for image passthrough.
+ * Anthropic API content block types for passthrough (images and documents).
  * Used when the final user message contains images that need to be
  * translated from pi-ai format to Anthropic format.
  */
@@ -27,7 +27,8 @@ type AnthropicContentBlock =
   | {
       type: "image";
       source: { type: "base64"; media_type: string; data: string };
-    };
+    }
+  | { type: "document"; source: unknown };
 
 // We use `any` for Context to avoid requiring @mariozechner/pi-ai at dev time.
 // At runtime, pi provides the real Context type.
@@ -97,6 +98,8 @@ function buildFinalUserContent(
         });
         placeholderImageCount++;
       }
+    } else if (block.type === "document" && block.source) {
+      blocks.push({ type: "document", source: block.source });
     }
     // Unknown block types silently skipped
   }
@@ -104,11 +107,14 @@ function buildFinalUserContent(
 }
 
 /**
- * Check if a message content array contains image blocks.
+ * Check if a message content array contains blocks sent to Claude as-is
+ * (images and documents).
  */
-function contentHasImages(content: string | any[]): boolean {
+function contentHasPassthrough(content: string | any[]): boolean {
   if (typeof content === "string" || !Array.isArray(content)) return false;
-  return content.some((block) => block.type === "image");
+  return content.some(
+    (block) => block.type === "image" || block.type === "document",
+  );
 }
 
 /**
@@ -194,7 +200,7 @@ export function buildResumePrompt(context: {
       parts.push(toolResultContentToText(msg.content));
     } else if (msg.role === "user") {
       // Check for images in the final user message
-      if (contentHasImages(msg.content)) {
+      if (contentHasPassthrough(msg.content)) {
         const textSoFar = parts.join("\n");
         const userContent = buildFinalUserContent(msg.content);
         const result: AnthropicContentBlock[] = [];
@@ -233,8 +239,10 @@ export function buildReplayPrompt(context: {
     if (message.role === "user") {
       tag = `<turn role="user">`;
       text = userContentToText(
-        i === finalUserIndex && contentHasImages(message.content)
-          ? (message.content as any[]).filter((b) => b.type !== "image")
+        i === finalUserIndex && contentHasPassthrough(message.content)
+          ? (message.content as any[]).filter(
+              (b) => b.type !== "image" && b.type !== "document",
+            )
           : message.content,
       );
     } else if (message.role === "assistant") {
@@ -248,10 +256,10 @@ export function buildReplayPrompt(context: {
     }
     blocks.push({ type: "text", text: `${tag}\n${text}\n</turn>` });
 
-    if (i === finalUserIndex && contentHasImages(message.content)) {
+    if (i === finalUserIndex && contentHasPassthrough(message.content)) {
       blocks.push(
         ...buildFinalUserContent(message.content).filter(
-          (b) => b.type === "image",
+          (b) => b.type === "image" || b.type === "document",
         ),
       );
     }
@@ -288,7 +296,7 @@ export function buildPrompt(context: {
   const finalUserIndex = findFinalUserMessageIndex(context.messages);
   const finalUserHasImages =
     finalUserIndex >= 0 &&
-    contentHasImages(context.messages[finalUserIndex].content);
+    contentHasPassthrough(context.messages[finalUserIndex].content);
   const anyToolResultHasImages = context.messages.some(
     (m: any) => m.role === "toolResult" && toolResultHasImages(m.content),
   );
@@ -393,16 +401,21 @@ export function buildPrompt(context: {
 
 /**
  * Describe the first block in the final user message that cannot reach Claude
- * (anything but text and image), or null if there is none. Rejecting it up
+ * (anything but text, image, or a document with a source), or null if there is none. Rejecting it up
  * front keeps attachments from being dropped silently.
  */
 export function findUnsupportedAttachment(messages: any[]): string | null {
   const index = findFinalUserMessageIndex(messages);
   const content = index >= 0 ? messages[index].content : undefined;
   if (!Array.isArray(content)) return null;
-  const block = content.find((b) => b.type !== "text" && b.type !== "image");
+  const block = content.find(
+    (b) =>
+      b.type !== "text" &&
+      b.type !== "image" &&
+      !(b.type === "document" && b.source),
+  );
   return block
-    ? `"${block.type}" attachments are not supported by pi-claude-subscription; only text and images can be sent.`
+    ? `"${block.type}" attachments are not supported by pi-claude-subscription; only text, images, and documents can be sent.`
     : null;
 }
 
