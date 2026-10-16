@@ -24,6 +24,7 @@ import {
   buildPrompt,
   buildSystemPrompt,
   buildResumePrompt,
+  findUnsupportedAttachment,
 } from "./prompt-builder.js";
 import {
   spawnClaude,
@@ -35,6 +36,7 @@ import {
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createEventBridge } from "./event-bridge.js";
+import { startRelay, describeFailure, type Relay } from "./relay.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
@@ -75,9 +77,26 @@ export function streamViaCli(
   (async () => {
     let proc: ReturnType<typeof spawnClaude> | undefined;
     let abortHandler: (() => void) | undefined;
+    let relay: Relay | undefined;
 
     try {
       const cwd = options?.cwd ?? process.cwd();
+
+      // Reject attachments the CLI path cannot carry, before spawning anything
+      const unsupported = findUnsupportedAttachment(context.messages);
+      if (unsupported) {
+        const output = createEventBridge(stream, model).getOutput();
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            ...output,
+            content: [{ type: "text", text: `Error: ${unsupported}` }],
+          },
+        });
+        stream.end();
+        return;
+      }
 
       // Resume if pi provides a session ID AND this isn't the first turn.
       // Pi passes sessionId on every call (including first), but we can only
@@ -103,6 +122,9 @@ export function streamViaCli(
         options?.thinkingBudgets,
       );
 
+      // One-request relay between the CLI and Anthropic
+      relay = await startRelay();
+
       // Spawn subprocess
       proc = spawnClaude(model.id, systemPrompt || undefined, {
         signal: options?.signal,
@@ -110,6 +132,7 @@ export function streamViaCli(
         mcpConfigPath: options?.mcpConfigPath,
         resumeSessionId,
         newSessionId: !resumeSessionId ? options?.sessionId : undefined,
+        baseUrl: relay.url,
       });
       const getStderr = captureStderr(proc);
 
@@ -139,6 +162,21 @@ export function streamViaCli(
         if (streamEnded || broken) return;
         streamEnded = true;
         const output = bridge.getOutput();
+        if (relay?.failure) {
+          // Auth and rate-limit failures end as a real error, so Pi can retry
+          // the retryable one and stop on the other.
+          stream.push({
+            type: "error",
+            reason: "error",
+            error: {
+              ...output,
+              stopReason: "error",
+              errorMessage: describeFailure(relay.failure),
+            },
+          } as any);
+          stream.end();
+          return;
+        }
         const errorMessage = {
           ...output,
           content: output.content?.length
@@ -278,6 +316,13 @@ export function streamViaCli(
       // Push done event after readline closes (async). Pushing synchronously
       // inside handleMessageStop prevents pi from executing tools.
       // Guard with streamEnded to avoid pushing done after an error was already pushed.
+      if (
+        !streamEnded &&
+        relay.failure &&
+        !bridge.getOutput().content?.length
+      ) {
+        endStreamWithError("");
+      }
       if (!streamEnded) {
         const output = bridge.getOutput();
 
@@ -316,6 +361,7 @@ export function streamViaCli(
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);
       }
+      await relay?.stop();
     }
   })();
 
