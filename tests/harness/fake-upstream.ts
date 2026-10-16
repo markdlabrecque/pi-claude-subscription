@@ -7,6 +7,7 @@ export type Scenario =
   | "tool_call"
   | "made_up_tool"
   | "made_up_mcp_tool"
+  | "custom_tool"
   | "401"
   | "429"
   | "hang";
@@ -95,6 +96,19 @@ export async function startFakeUpstream(
           break;
         case "made_up_mcp_tool":
           body = toolUse("mcp__ghost-server__totally_made_up_tool");
+          break;
+        case "custom_tool":
+          body = message(
+            [
+              {
+                type: "tool_use",
+                id: "toolu_fake",
+                name: "mcp__custom-tools__hello",
+                input: { name: "Pi" },
+              },
+            ],
+            "tool_use",
+          );
           break;
         case "401":
           ({ status, body } = error("authentication_error", 401));

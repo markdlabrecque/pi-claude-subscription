@@ -24,6 +24,7 @@ import {
   buildPrompt,
   buildSystemPrompt,
   buildResumePrompt,
+  findUnsupportedAttachment,
 } from "./prompt-builder.js";
 import {
   spawnClaude,
@@ -79,6 +80,22 @@ export function streamViaCli(
 
     try {
       const cwd = options?.cwd ?? process.cwd();
+
+      // Reject attachments the CLI path cannot carry, before spawning anything
+      const unsupported = findUnsupportedAttachment(context.messages);
+      if (unsupported) {
+        const output = createEventBridge(stream, model).getOutput();
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            ...output,
+            content: [{ type: "text", text: `Error: ${unsupported}` }],
+          },
+        });
+        stream.end();
+        return;
+      }
 
       // Resume if pi provides a session ID AND this isn't the first turn.
       // Pi passes sessionId on every call (including first), but we can only
