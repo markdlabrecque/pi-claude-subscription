@@ -4,9 +4,94 @@
 // Reads one user message from stdin, forwards the prompt upstream (like the real CLI
 // would), and replays the reply as stream-json events.
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { execSync, spawn } = require("node:child_process");
+const readline = require("node:readline");
+
 const args = process.argv.slice(2);
-const modelIdx = args.indexOf("--model");
-const model = modelIdx >= 0 ? args[modelIdx + 1] : "unknown";
+const flag = (name) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const model = flag("--model") ?? "unknown";
+
+// Host config the real CLI would load, switched off by the same flags/env.
+const BUILT_IN_TOOLS = ["Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+const DEFAULT_PROMPT = "You are Claude Code, Anthropic's official CLI.";
+const claudeDir = path.join(os.homedir(), ".claude");
+const readIf = (file) =>
+  fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : "";
+const settingsOn = flag("--setting-sources") !== "";
+const claudeMdsOn =
+  settingsOn && process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS !== "1";
+const skillsOn = !args.includes("--disable-slash-commands");
+
+function systemPrompt() {
+  const replace =
+    flag("--system-prompt") ?? readIf(flag("--system-prompt-file") ?? "");
+  const append =
+    flag("--append-system-prompt") ??
+    readIf(flag("--append-system-prompt-file") ?? "");
+  return [replace || DEFAULT_PROMPT, append].filter(Boolean).join("\n");
+}
+
+function skillListing() {
+  const dir = path.join(claudeDir, "skills");
+  if (!skillsOn || !fs.existsSync(dir)) return "";
+  return fs
+    .readdirSync(dir)
+    .map((name) => readIf(path.join(dir, name, "SKILL.md")))
+    .join("\n");
+}
+
+function hookOutput(event) {
+  if (!settingsOn) return "";
+  const settings = readIf(path.join(claudeDir, "settings.json"));
+  const hooks = settings ? (JSON.parse(settings).hooks?.[event] ?? []) : [];
+  return hooks
+    .flatMap((h) => h.hooks)
+    .map((h) => execSync(h.command, { encoding: "utf-8" }))
+    .join("\n");
+}
+
+// Tools come from --mcp-config servers, queried like the real CLI does.
+function mcpToolNames() {
+  const file = flag("--mcp-config");
+  if (!file) return Promise.resolve([]);
+  const servers = JSON.parse(fs.readFileSync(file, "utf-8")).mcpServers ?? {};
+  return Promise.all(
+    Object.entries(servers).map(
+      ([server, { command, args: serverArgs }]) =>
+        new Promise((resolve) => {
+          const child = spawn(command, serverArgs, {
+            stdio: ["pipe", "pipe", "ignore"],
+          });
+          const rl = readline.createInterface({ input: child.stdout });
+          rl.on("line", (line) => {
+            const msg = JSON.parse(line);
+            if (msg.id === 1) {
+              child.stdin.write(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 2,
+                  method: "tools/list",
+                }) + "\n",
+              );
+            } else if (msg.id === 2) {
+              child.kill();
+              resolve(msg.result.tools.map((t) => `mcp__${server}__${t.name}`));
+            }
+          });
+          child.stdin.write(
+            JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) +
+              "\n",
+          );
+        }),
+    ),
+  ).then((names) => names.flat());
+}
 
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 const event = (e) => emit({ type: "stream_event", event: e });
@@ -25,13 +110,36 @@ process.stdin.on("data", (chunk) => {
 });
 
 async function run(userMessage) {
+  const context = [
+    claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
+    hookOutput("UserPromptSubmit"),
+  ].filter(Boolean);
+  const content = userMessage.message.content;
+  const blocks =
+    typeof content === "string" ? [{ type: "text", text: content }] : content;
+  const tools = [
+    ...(flag("--tools") === "" ? [] : BUILT_IN_TOOLS),
+    ...(await mcpToolNames()),
+  ];
   const res = await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model,
       max_tokens: 1024,
-      messages: [userMessage.message],
+      system: [systemPrompt(), skillListing()].filter(Boolean).join("\n"),
+      tools: tools.map((name) => ({ name })),
+      // Where the CLI ran, so tests can check the directory is cleaned up.
+      fake_cwd: process.cwd(),
+      messages: [
+        {
+          ...userMessage.message,
+          content: [
+            ...context.map((text) => ({ type: "text", text })),
+            ...blocks,
+          ],
+        },
+      ],
     }),
   });
   const reply = await res.json();

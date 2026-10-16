@@ -8,24 +8,21 @@
 
 import spawn from "cross-spawn";
 import { execSync } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import type { ChildProcess } from "node:child_process";
+import { createIsolation } from "./isolation.js";
 
 /**
  * Spawn a Claude CLI subprocess with all required flags for stream-json communication.
  *
  * @param modelId - The model ID to pass via --model flag
- * @param systemPrompt - Optional system prompt appended via --append-system-prompt
- * @param options - Optional cwd, AbortSignal, and effort level
+ * @param systemPrompt - Optional system prompt that replaces Claude Code's
+ * @param options - Optional AbortSignal and effort level
  * @returns The spawned ChildProcess with piped stdin/stdout/stderr
  */
 export function spawnClaude(
   modelId: string,
   systemPrompt?: string,
   options?: {
-    cwd?: string;
     signal?: AbortSignal;
     effort?: string;
     mcpConfigPath?: string;
@@ -55,17 +52,6 @@ export function spawnClaude(
     args.push("--session-id", options.newSessionId);
   }
 
-  if (systemPrompt) {
-    // Write system prompt to a temp file to avoid ENAMETOOLONG on Windows.
-    // Claude CLI's --append-system-prompt accepts a file path or literal text.
-    const tmpFile = join(
-      tmpdir(),
-      `pi-claude-subscription-sysprompt-${process.pid}.txt`,
-    );
-    writeFileSync(tmpFile, systemPrompt, "utf-8");
-    args.push("--append-system-prompt", tmpFile);
-  }
-
   if (options?.effort) {
     args.push("--effort", options.effort);
   }
@@ -74,25 +60,20 @@ export function spawnClaude(
     args.push("--mcp-config", options.mcpConfigPath);
   }
 
-  const proc = spawn("claude", args, {
-    stdio: ["pipe", "pipe", "pipe"],
-    cwd: options?.cwd ?? process.cwd(),
-  });
-
-  return proc as ChildProcess;
-}
-
-/**
- * Clean up the temp system prompt file created by spawnClaude.
- * Safe to call multiple times or when no file exists.
- */
-export function cleanupSystemPromptFile(): void {
+  // Private temp cwd, removed once the process is gone (or if spawning fails)
+  const isolation = createIsolation(systemPrompt);
   try {
-    unlinkSync(
-      join(tmpdir(), `pi-claude-subscription-sysprompt-${process.pid}.txt`),
-    );
-  } catch {
-    // File doesn't exist or already deleted — ignore
+    const proc = spawn("claude", [...args, ...isolation.args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: isolation.cwd,
+      env: { ...process.env, ...isolation.env },
+    });
+    proc.once("close", isolation.cleanup);
+    proc.once("error", isolation.cleanup);
+    return proc as ChildProcess;
+  } catch (err) {
+    isolation.cleanup();
+    throw err;
   }
 }
 
