@@ -221,7 +221,8 @@ export function buildResumePrompt(context: {
  * Build the prompt for replay mode: one text block per history message, oldest
  * first, each wrapped in a <turn> tag. Tool calls and results ride along as
  * text inside their turns. Images in the final user message pass through as
- * image blocks after its turn; earlier ones become a text placeholder.
+ * image blocks after its turn, and documents in any user turn follow that
+ * turn. Earlier images become a text placeholder.
  *
  * Block bytes depend only on their own message, so earlier blocks stay stable
  * between turns and hit the prompt cache.
@@ -243,7 +244,7 @@ export function buildReplayPrompt(context: {
           ? (message.content as any[]).filter(
               (b) => b.type !== "image" && b.type !== "document",
             )
-          : message.content,
+          : withoutDocuments(message.content),
       );
     } else if (message.role === "assistant") {
       tag = `<turn role="assistant">`;
@@ -255,11 +256,13 @@ export function buildReplayPrompt(context: {
       return;
     }
     blocks.push({ type: "text", text: `${tag}\n${text}\n</turn>` });
+    if (message.role === "user")
+      blocks.push(...documentBlocks(message.content));
 
     if (i === finalUserIndex && contentHasPassthrough(message.content)) {
       blocks.push(
         ...buildFinalUserContent(message.content).filter(
-          (b) => b.type === "image" || b.type === "document",
+          (b) => b.type === "image",
         ),
       );
     }
@@ -301,16 +304,25 @@ export function buildPrompt(context: {
     (m: any) => m.role === "toolResult" && toolResultHasImages(m.content),
   );
 
-  if (finalUserHasImages || anyToolResultHasImages) {
+  const anyUserHasDocument = context.messages.some(
+    (m: any) =>
+      m.role === "user" &&
+      Array.isArray(m.content) &&
+      m.content.some((b: any) => b.type === "document" && b.source),
+  );
+
+  if (finalUserHasImages || anyToolResultHasImages || anyUserHasDocument) {
     // Build history as text (all messages except the final user message)
     const historyParts: string[] = [];
+    const historyDocuments: AnthropicContentBlock[] = [];
     const toolResultImageBlocks: AnthropicContentBlock[] = [];
     for (let i = 0; i < context.messages.length; i++) {
       if (i === finalUserIndex) continue; // Skip final user message -- handled separately
       const message = context.messages[i];
       if (message.role === "user") {
+        historyDocuments.push(...documentBlocks(message.content));
         historyParts.push("USER:");
-        historyParts.push(userContentToText(message.content));
+        historyParts.push(userContentToText(withoutDocuments(message.content)));
       } else if (message.role === "assistant") {
         historyParts.push("ASSISTANT:");
         historyParts.push(contentToText(message.content));
@@ -348,7 +360,7 @@ export function buildPrompt(context: {
         : [];
 
     // Combine: history text + tool result images + final user content blocks
-    const result: AnthropicContentBlock[] = [];
+    const result: AnthropicContentBlock[] = [...historyDocuments];
     const historyText = historyParts.join("\n");
     if (historyText) {
       result.push({ type: "text", text: historyText });
@@ -501,6 +513,22 @@ function userContentToText(content: string | any[]): string {
     }
   }
   return texts.join("\n");
+}
+
+/**
+ * Document blocks from a user message, sent to Claude as their own blocks.
+ */
+function documentBlocks(content: string | any[]): AnthropicContentBlock[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((b) => b.type === "document" && b.source)
+    .map((b) => ({ type: "document", source: b.source }));
+}
+
+/** The content with its document blocks removed, for text-only conversion. */
+function withoutDocuments(content: string | any[]): string | any[] {
+  if (!Array.isArray(content)) return content;
+  return content.filter((b) => b.type !== "document");
 }
 
 /**

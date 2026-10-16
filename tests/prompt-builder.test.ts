@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildPrompt, buildResumePrompt } from "../src/prompt-builder";
 
 describe("buildPrompt", () => {
+  it("keeps a document from an earlier turn as its own block", () => {
+    const source = { type: "text", media_type: "text/plain", data: "PELICAN" };
+    const context = {
+      messages: [
+        { role: "user", content: [{ type: "document", source }] },
+        { role: "assistant", content: "Noted." },
+        { role: "user", content: "What is the word?" },
+      ],
+    } as unknown as any;
+    const blocks = buildPrompt(context) as any[];
+    expect(blocks).toContainEqual({ type: "document", source });
+  });
+
   it("returns empty string for empty messages array", () => {
     const context = { messages: [] } as unknown as any;
     expect(buildPrompt(context)).toBe("");

@@ -61,6 +61,32 @@ describe("attachments", () => {
     expect(sent).toContainEqual({ type: "document", source });
   });
 
+  it("sends a document from an earlier turn with the later request", async () => {
+    upstream = await startFakeUpstream();
+    claude = installFakeClaude(upstream.url);
+    const source = {
+      type: "text",
+      media_type: "text/plain",
+      data: "The secret word is PELICAN-42.",
+    };
+
+    const stream = streamViaCli(model, {
+      messages: [
+        { role: "user", content: [{ type: "document", source }], timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Noted." }],
+          timestamp: 2,
+        },
+        { role: "user", content: "What is the secret word?", timestamp: 3 },
+      ],
+    });
+    for await (const _ of stream);
+
+    const sent = (upstream.requests[0].body as any).messages[0].content;
+    expect(sent).toContainEqual({ type: "document", source });
+  });
+
   it("rejects an unsupported attachment with a clear error before any request", async () => {
     upstream = await startFakeUpstream();
     claude = installFakeClaude(upstream.url);
