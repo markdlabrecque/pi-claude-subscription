@@ -768,6 +768,46 @@ describe("streamViaCli", () => {
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
     });
 
+    it("does NOT break-early for a CLI-internal tool (ToolSearch)", async () => {
+      const model = mockModels[0] as any;
+      streamViaCli(model, { messages: [{ role: "user", content: "Hi" }] });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const proc = (spawn as any).mock.results[0].value;
+      const lines = [
+        {
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_s",
+              name: "ToolSearch",
+            },
+          },
+        },
+        {
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        },
+        {
+          type: "stream_event",
+          event: {
+            type: "message_delta",
+            delta: { stop_reason: "tool_use" },
+            usage: { output_tokens: 1 },
+          },
+        },
+        { type: "stream_event", event: { type: "message_stop" } },
+      ];
+      for (const line of lines) proc.stdout.write(JSON.stringify(line) + "\n");
+      proc.stdout.end();
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+    });
+
     it("does NOT break-early when stream has no tool_use blocks", async () => {
       const model = mockModels[0] as any;
       const context = {

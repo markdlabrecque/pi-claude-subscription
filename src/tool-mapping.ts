@@ -76,6 +76,14 @@ PI_TO_CLAUDE_NAME["glob"] = "Glob";
 /** Any MCP server prefix, e.g. "mcp__custom-tools__" or "mcp__other__". */
 const MCP_PREFIX = /^mcp__.+?__/;
 
+/** Claude Code's own tools. The CLI runs these itself; pi has no equivalent. */
+const INTERNAL_CLAUDE_TOOLS = new Set(["toolsearch", "task", "agent"]);
+
+/** True for CLI-internal tools (ToolSearch, Task, Agent) that pi must not see. */
+export function isInternalClaudeTool(claudeName: string): boolean {
+  return INTERNAL_CLAUDE_TOOLS.has(claudeName.toLowerCase());
+}
+
 /**
  * Map a Claude tool name to the corresponding pi tool name.
  * Strips any mcp__<server>__ prefix first, then falls back to

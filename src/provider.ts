@@ -30,6 +30,7 @@ import {
   buildResumePrompt,
   findUnsupportedAttachment,
 } from "./prompt-builder.js";
+import { isInternalClaudeTool } from "./tool-mapping.js";
 import {
   spawnClaude,
   writeUserMessage,
@@ -358,9 +359,10 @@ export function streamViaCli(
           if (
             isTopLevel &&
             msg.event.type === "content_block_start" &&
-            msg.event.content_block?.type === "tool_use"
+            msg.event.content_block?.type === "tool_use" &&
+            !isInternalClaudeTool(msg.event.content_block.name ?? "")
           ) {
-            // Every tool call goes to pi, offered or not; pi reports unknown ones
+            // Every tool call pi can see counts, offered or not; pi reports unknown ones
             sawToolCall = true;
           }
 

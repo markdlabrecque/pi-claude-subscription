@@ -11,6 +11,7 @@ import type {
 import {
   mapClaudeToolNameToPi,
   translateClaudeArgsToPi,
+  isInternalClaudeTool,
 } from "./tool-mapping.js";
 
 /**
@@ -179,6 +180,9 @@ export function createEventBridge(
       });
     } else if (blockType === "tool_use") {
       const claudeName = event.content_block!.name!;
+
+      // The CLI runs its internal tools itself; pi must not see them
+      if (isInternalClaudeTool(claudeName)) return;
 
       const piName = mapClaudeToolNameToPi(claudeName);
       const id = event.content_block!.id!;

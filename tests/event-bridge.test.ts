@@ -344,6 +344,21 @@ describe("createEventBridge", () => {
   });
 
   describe("tool_use content block streaming", () => {
+    it("does not forward CLI-internal tools (ToolSearch) to pi", () => {
+      const bridge = createBridgeWithStart();
+      bridge.handleEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_01ABC",
+          name: "ToolSearch",
+        },
+      });
+
+      expect(stream.push).not.toHaveBeenCalled();
+    });
+
     it("pushes toolcall_start with mapped pi name on content_block_start", () => {
       const bridge = createBridgeWithStart();
       bridge.handleEvent({
