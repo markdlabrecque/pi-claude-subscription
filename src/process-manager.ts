@@ -28,6 +28,8 @@ export function spawnClaude(
     mcpConfigPath?: string;
     resumeSessionId?: string;
     newSessionId?: string;
+    /** Replay mode: leave no CLI session state behind. */
+    stateless?: boolean;
     /** Relay base URL; the CLI sends its API traffic here. */
     baseUrl?: string;
   },
@@ -49,9 +51,13 @@ export function spawnClaude(
   if (options?.resumeSessionId) {
     // Resume an existing session — CLI loads prior conversation from disk
     args.push("--resume", options.resumeSessionId);
+    // A resumed session freezes its first system prompt; this lets ours apply
+    args.push("--system-prompt-snapshot", "off");
   } else if (options?.newSessionId) {
     // First turn: create session with this ID so subsequent turns can --resume it
     args.push("--session-id", options.newSessionId);
+  } else if (options?.stateless) {
+    args.push("--no-session-persistence");
   }
 
   if (options?.effort) {

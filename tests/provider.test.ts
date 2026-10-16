@@ -1435,6 +1435,13 @@ describe("streamViaCli", () => {
   });
 
   describe("session resume via options.sessionId", () => {
+    beforeEach(() => {
+      process.env.PI_CLAUDE_SUBSCRIPTION_SESSION_MODE = "resume";
+    });
+    afterEach(() => {
+      delete process.env.PI_CLAUDE_SUBSCRIPTION_SESSION_MODE;
+    });
+
     it("passes --resume when sessionId option is provided on subsequent turn", async () => {
       const model = mockModels[0] as any;
       const context = {
@@ -1523,7 +1530,7 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    it("does not pass system prompt when resuming", async () => {
+    it("passes the system prompt again when resuming, with the snapshot off", async () => {
       const model = mockModels[0] as any;
       const context = {
         messages: [
@@ -1539,7 +1546,8 @@ describe("streamViaCli", () => {
 
       const args = (spawn as any).mock.calls[0][1] as string[];
       expect(args).toContain("--resume");
-      expect(args).not.toContain("--append-system-prompt");
+      expect(args).toContain("--system-prompt-file");
+      expect(args.join(" ")).toContain("--system-prompt-snapshot off");
 
       // Clean up
       const proc = (spawn as any).mock.results[0].value;

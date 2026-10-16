@@ -211,6 +211,60 @@ export function buildResumePrompt(context: {
   return parts.join("\n") || "";
 }
 
+/**
+ * Build the prompt for replay mode: one text block per history message, oldest
+ * first, each wrapped in a <turn> tag. Tool calls and results ride along as
+ * text inside their turns. Images in the final user message pass through as
+ * image blocks after its turn; earlier ones become a text placeholder.
+ *
+ * Block bytes depend only on their own message, so earlier blocks stay stable
+ * between turns and hit the prompt cache.
+ */
+export function buildReplayPrompt(context: {
+  messages: any[];
+}): AnthropicContentBlock[] {
+  placeholderImageCount = 0;
+  const finalUserIndex = findFinalUserMessageIndex(context.messages);
+  const blocks: AnthropicContentBlock[] = [];
+
+  context.messages.forEach((message, i) => {
+    let tag: string;
+    let text: string;
+    if (message.role === "user") {
+      tag = `<turn role="user">`;
+      text = userContentToText(
+        i === finalUserIndex && contentHasImages(message.content)
+          ? (message.content as any[]).filter((b) => b.type !== "image")
+          : message.content,
+      );
+    } else if (message.role === "assistant") {
+      tag = `<turn role="assistant">`;
+      text = contentToText(message.content);
+    } else if (message.role === "toolResult") {
+      tag = `<turn role="tool"${message.toolName ? ` name="${message.toolName}"` : ""}>`;
+      text = toolResultContentToText(message.content);
+    } else {
+      return;
+    }
+    blocks.push({ type: "text", text: `${tag}\n${text}\n</turn>` });
+
+    if (i === finalUserIndex && contentHasImages(message.content)) {
+      blocks.push(
+        ...buildFinalUserContent(message.content).filter(
+          (b) => b.type === "image",
+        ),
+      );
+    }
+  });
+
+  if (placeholderImageCount > 0) {
+    console.warn(
+      `[pi-claude-subscription] ${placeholderImageCount} image(s) in conversation history could not be included in the prompt`,
+    );
+  }
+  return blocks;
+}
+
 export function buildPrompt(context: {
   messages: any[];
 }): string | AnthropicContentBlock[] {
@@ -371,6 +425,7 @@ function findFinalUserMessageIndex(messages: any[]): number {
 export function buildSystemPrompt(
   context: { systemPrompt?: string; messages: any[] },
   cwd: string,
+  replay = false,
 ): string {
   const parts: string[] = [];
 
@@ -396,6 +451,13 @@ export function buildSystemPrompt(
     parts.push(
       "IMPORTANT: The conversation history below contains tool results from previously executed tools. " +
         "Use these results to answer the user's question. Do NOT attempt to re-call tools that already have results.",
+    );
+  }
+
+  if (replay) {
+    parts.push(
+      "The conversation so far is given as <turn> blocks, oldest first. " +
+        "Reply as the assistant to the last user turn.",
     );
   }
 
