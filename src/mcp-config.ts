@@ -76,7 +76,12 @@ export function writeMcpConfig(toolDefs: McpToolDef[]): string {
 
   // Write config to temp file
   const configFilePath = join(tmpdir(), `${CONFIG_PREFIX}${id}.json`);
-  writeFileSync(configFilePath, JSON.stringify(config));
+  try {
+    writeFileSync(configFilePath, JSON.stringify(config));
+  } catch (err) {
+    rmSync(schemaFilePath, { force: true });
+    throw err;
+  }
 
   return configFilePath;
 }
