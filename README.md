@@ -133,6 +133,49 @@ Resume notes:
 
 `--model fable` works. The alias resolves to `claude-fable-5-1`, and a real request on it returned 200. The full id `claude-fable-5-1` is accepted by the CLI as is. The other aliases resolve to `claude-haiku-5-5`, `claude-sonnet-5-5` and `claude-opus-5-5`.
 
+## Acceptance runs
+
+Opt-in runs against the real `claude` CLI and a real subscription. They are not part of `npm test`. `scripts/acceptance/run.ts` drives `streamViaCli` the way Pi does (Haiku, two schema-only Pi tools, short prompts), runs the tools itself, and reads the relay's own per-request log lines. `scripts/acceptance/claude-spy.cjs` sits in front of the real CLI on PATH and records only the type of each CLI output message, so Claude Code tool executions (a `user` message with a `tool_result` block) can be counted. On the host the run uses a private `CLAUDE_CONFIG_DIR` with a symlink to the existing login, so the CLI's own state stays out of `~/.claude`.
+
+Run on 2026-10-15, Linux, CLI 2.1.301, model `haiku`.
+
+### 1. 50 consecutive tool-using turns
+
+```
+npx vite-node scripts/acceptance/run.ts turns 50
+```
+
+Result: pass. 50 tool-using turns (`step` x 41, `lookup` x 9; one tool call per turn) plus 1 final text turn. 51 upstream requests in total, exactly 1 per turn, all status 200. 0 requests rejected by the relay. 0 Claude Code tool executions in 578 CLI output messages. 0 stray CLI processes and 0 leftover temp dirs afterwards. 102 input and 2979 output tokens as reported by the CLI (the rest was cache). About 4.2 s per turn.
+
+### 2. Cross-container replay
+
+Build a throwaway image with the CLI installed the supported way, copy the repo (with `node_modules`) to a scratch dir, then run the two halves in separate containers. Each container is `--rm`, runs as uid 1000, gets a fresh tmpfs for `~/.claude`, and gets the host credentials file as a read-only bind mount. The two containers share only `/shared`, which holds the Pi message history.
+
+```
+printf 'FROM node:22-slim\nRUN npm i -g @anthropic-ai/claude-code@2.1.301\n' > Dockerfile
+docker build -t pi-accept-claude:2.1.301 .
+run() { docker run --rm --user 1000:1000 \
+  --tmpfs /home/node/.claude:uid=1000,gid=1000 \
+  -v "$HOME/.claude/.credentials.json:/home/node/.claude/.credentials.json:ro" \
+  -v "$APP:/app" -v "$SHARED:/shared" -w /app pi-accept-claude:2.1.301 \
+  node_modules/.bin/vite-node scripts/acceptance/run.ts "$@"; }
+run start /shared     # container A
+run finish /shared    # container B, fresh
+```
+
+Result: pass.
+
+- A: one request, Haiku called `lookup` for `alpha` and `beta`; Pi issued a random code per key and saved the history.
+- B: a new container, `~/.claude` held only `.credentials.json` before its first request. Replay sent the history in one request; the answer contained the `alpha` code, which exists only in A's history. 1 upstream request, status 200, 0 rejected.
+- The provider works inside the container. The CLI left only its own process registry files under `~/.claude/sessions` and a config backup, no `projects/` transcript.
+- Read-only proof: in the container the bind mount shows as `ro`, `echo x >> .credentials.json` fails with `Read-only file system`, and `rm` fails with `Device or resource busy`. The host file's size and mtime (1032 bytes, 13:34:38) were identical before and after. The file was never read or copied.
+
+### 3. Test suite
+
+On Linux (`Linux 7.2.5`, Node 24): `npm test` 19 files, 320 tests passed; `npm run lint` clean; `npm run typecheck` clean; `npm run format:check` clean.
+
+macOS was not run: no macOS machine was available. The macOS criterion is open.
+
 ## License
 
 MIT. Copyright (c) 2026 Rebecca Chernoff (upstream author); see [LICENSE](LICENSE).
