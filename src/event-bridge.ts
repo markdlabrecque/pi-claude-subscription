@@ -11,7 +11,7 @@ import type {
 import {
   mapClaudeToolNameToPi,
   translateClaudeArgsToPi,
-  isPiKnownClaudeTool,
+  isInternalClaudeTool,
 } from "./tool-mapping.js";
 
 /**
@@ -181,11 +181,8 @@ export function createEventBridge(
     } else if (blockType === "tool_use") {
       const claudeName = event.content_block!.name!;
 
-      // Skip internal Claude Code tools (ToolSearch, Task, Agent, etc.)
-      // that pi cannot execute — only emit pi-known tools
-      if (!isPiKnownClaudeTool(claudeName)) {
-        return;
-      }
+      // The CLI runs its internal tools itself; pi must not see them
+      if (isInternalClaudeTool(claudeName)) return;
 
       const piName = mapClaudeToolNameToPi(claudeName);
       const id = event.content_block!.id!;

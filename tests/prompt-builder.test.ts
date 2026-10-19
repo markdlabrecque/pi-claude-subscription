@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildPrompt, buildResumePrompt } from "../src/prompt-builder";
 
 describe("buildPrompt", () => {
+  it("keeps a document from an earlier turn as its own block", () => {
+    const source = { type: "text", media_type: "text/plain", data: "PELICAN" };
+    const context = {
+      messages: [
+        { role: "user", content: [{ type: "document", source }] },
+        { role: "assistant", content: "Noted." },
+        { role: "user", content: "What is the word?" },
+      ],
+    } as unknown as any;
+    const blocks = buildPrompt(context) as any[];
+    expect(blocks).toContainEqual({ type: "document", source });
+  });
+
   it("returns empty string for empty messages array", () => {
     const context = { messages: [] } as unknown as any;
     expect(buildPrompt(context)).toBe("");
@@ -909,6 +922,32 @@ describe("buildSystemPrompt", () => {
     const result = bsp(context, "/some/project");
     expect(result).toContain("IMPORTANT:");
     expect(result).toContain("tool results");
+  });
+
+  it("replay instruction covers a history that ends on a tool result", async () => {
+    vi.doMock("node:fs", () => ({
+      existsSync: () => false,
+      readFileSync: () => "",
+    }));
+
+    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
+    const context = {
+      messages: [
+        { role: "user", content: "read the file" },
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "read", arguments: { path: "a" } },
+          ],
+        },
+        { role: "toolResult", content: "file contents here", toolName: "read" },
+      ],
+    } as unknown as any;
+    const result = bsp(context, "/some/project", true);
+    expect(result).toContain("last turn is a tool result");
+    expect(result).not.toContain(
+      "Reply as the assistant to the last user turn.",
+    );
   });
 });
 

@@ -8,29 +8,34 @@
 
 import spawn from "cross-spawn";
 import { execSync } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import type { ChildProcess } from "node:child_process";
+import { createIsolation } from "./isolation.js";
+
+/** Credentials the CLI would prefer over the subscription login. */
+const STRIPPED_ENV = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
 
 /**
  * Spawn a Claude CLI subprocess with all required flags for stream-json communication.
  *
  * @param modelId - The model ID to pass via --model flag
- * @param systemPrompt - Optional system prompt appended via --append-system-prompt
- * @param options - Optional cwd, AbortSignal, and effort level
+ * @param systemPrompt - Pi's system prompt; it always replaces Claude Code's
+ * (a minimal one stands in when empty)
+ * @param options - Abort signal, effort, MCP config, session ids, stateless mode and relay URL
  * @returns The spawned ChildProcess with piped stdin/stdout/stderr
  */
 export function spawnClaude(
   modelId: string,
   systemPrompt?: string,
   options?: {
-    cwd?: string;
     signal?: AbortSignal;
     effort?: string;
     mcpConfigPath?: string;
     resumeSessionId?: string;
     newSessionId?: string;
+    /** Replay mode: leave no CLI session state behind. */
+    stateless?: boolean;
+    /** Relay base URL; the CLI sends its API traffic here. */
+    baseUrl?: string;
   },
 ): ChildProcess {
   const args = [
@@ -50,20 +55,13 @@ export function spawnClaude(
   if (options?.resumeSessionId) {
     // Resume an existing session — CLI loads prior conversation from disk
     args.push("--resume", options.resumeSessionId);
+    // A resumed session freezes its first system prompt; this lets ours apply
+    args.push("--system-prompt-snapshot", "off");
   } else if (options?.newSessionId) {
     // First turn: create session with this ID so subsequent turns can --resume it
     args.push("--session-id", options.newSessionId);
-  }
-
-  if (systemPrompt) {
-    // Write system prompt to a temp file to avoid ENAMETOOLONG on Windows.
-    // Claude CLI's --append-system-prompt accepts a file path or literal text.
-    const tmpFile = join(
-      tmpdir(),
-      `pi-claude-subscription-sysprompt-${process.pid}.txt`,
-    );
-    writeFileSync(tmpFile, systemPrompt, "utf-8");
-    args.push("--append-system-prompt", tmpFile);
+  } else if (options?.stateless) {
+    args.push("--no-session-persistence");
   }
 
   if (options?.effort) {
@@ -74,31 +72,48 @@ export function spawnClaude(
     args.push("--mcp-config", options.mcpConfigPath);
   }
 
-  const proc = spawn("claude", args, {
-    stdio: ["pipe", "pipe", "pipe"],
-    cwd: options?.cwd ?? process.cwd(),
-  });
-
-  return proc as ChildProcess;
-}
-
-/**
- * Clean up the temp system prompt file created by spawnClaude.
- * Safe to call multiple times or when no file exists.
- */
-export function cleanupSystemPromptFile(): void {
+  // Private temp cwd, removed once the process is gone (or if spawning fails)
+  const isolation = createIsolation(systemPrompt);
   try {
-    unlinkSync(
-      join(tmpdir(), `pi-claude-subscription-sysprompt-${process.pid}.txt`),
-    );
-  } catch {
-    // File doesn't exist or already deleted — ignore
+    // Keep the CLI on the subscription: no API key or other provider may
+    // switch it to API billing behind the relay's back.
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (STRIPPED_ENV.has(key) || key.startsWith("CLAUDE_CODE_USE_")) {
+        delete env[key];
+      }
+    }
+
+    const proc = spawn("claude", [...args, ...isolation.args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      // Own process group, so the whole tree can be killed at once
+      detached: process.platform !== "win32",
+      cwd: isolation.cwd,
+      env: {
+        ...env,
+        ...isolation.env,
+        ...(options?.baseUrl && {
+          ANTHROPIC_BASE_URL: options.baseUrl,
+          // Suppresses the Haiku session-title request, so the relay's first
+          // Messages request is the real one.
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        }),
+      },
+    });
+    // Reap anything the CLI left running in its group
+    proc.once("exit", () => killProcessGroup(proc));
+    proc.once("close", isolation.cleanup);
+    proc.once("error", isolation.cleanup);
+    return proc as ChildProcess;
+  } catch (err) {
+    isolation.cleanup();
+    throw err;
   }
 }
 
 /**
  * Write a user message to the subprocess stdin as NDJSON.
- * Does NOT call stdin.end() -- stdin stays open for control_response in Phase 2.
+ * Does NOT call stdin.end() -- stdin stays open for control_response replies.
  *
  * Accepts both string (text-only prompt) and array (ContentBlock[] with images)
  * content. JSON.stringify handles both natively. The stream-json protocol
@@ -121,15 +136,41 @@ export function writeUserMessage(
   proc.stdin!.write(JSON.stringify(message) + "\n");
 }
 
+/** Per-request timeout when the env var is unset or invalid: 10 minutes. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
+export const REQUEST_TIMEOUT_ENV = "PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS";
+
+/** Per-request timeout in ms; read on every request. */
+export function getRequestTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const value = Number(env[REQUEST_TIMEOUT_ENV]);
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+/** SIGKILL the process group the CLI leads (macOS/Linux). Ignores a gone group. */
+function killProcessGroup(proc: ChildProcess): void {
+  if (process.platform === "win32" || typeof proc.pid !== "number") return;
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    // Group already gone
+  }
+}
+
 /**
- * Force-kill a subprocess immediately via SIGKILL.
+ * Force-kill a subprocess and everything it started via SIGKILL.
  * No-ops if the process is already dead (killed or exited).
  * Cross-platform safe: Node.js treats SIGKILL as forceful termination on Windows.
  *
  * @param proc - The subprocess to force-kill
  */
 export function forceKillProcess(proc: ChildProcess): void {
-  if (proc.killed || proc.exitCode !== null) return;
+  if (proc.killed || proc.exitCode !== null || proc.signalCode) return;
+  killProcessGroup(proc);
   proc.kill("SIGKILL");
 }
 
@@ -156,6 +197,39 @@ export function killAllProcesses(): void {
     forceKillProcess(proc);
   }
   activeProcesses.clear();
+}
+
+/** Signals that end pi without running 'exit' listeners. */
+const TERMINAL_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
+
+/**
+ * Kill every registered CLI tree, then re-raise the signal so pi still exits.
+ * The re-raise only happens when nothing else is listening for the signal,
+ * so an app-level handler keeps control of its own shutdown.
+ *
+ * @param signal - The terminal signal pi received
+ */
+export function onTerminalSignal(signal: NodeJS.Signals): void {
+  killAllProcesses();
+  if (process.listenerCount(signal) === 0) {
+    process.kill(process.pid, signal);
+  }
+}
+
+/**
+ * Register cleanup for terminal signals. Each handler is removed before it
+ * runs, so the re-raise in onTerminalSignal reaches the default action. When
+ * an app handler still owns shutdown, cleanup is re-armed for the next signal.
+ */
+export function installSignalCleanup(): void {
+  for (const signal of TERMINAL_SIGNALS) armSignal(signal);
+}
+
+function armSignal(signal: NodeJS.Signals): void {
+  process.once(signal, () => {
+    onTerminalSignal(signal);
+    if (process.listenerCount(signal) > 0) armSignal(signal);
+  });
 }
 
 /**
@@ -185,17 +259,48 @@ export function captureStderr(proc: ChildProcess): () => string {
   return () => buffer;
 }
 
+/** Tested Claude CLI range: `min` inclusive, `maxExclusive` exclusive. */
+export const TESTED_CLI_RANGE = { min: "2.1.0", maxExclusive: "2.2.0" };
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 /**
- * Validate that the Claude CLI is installed and on PATH.
+ * Validate that the Claude CLI is installed and on PATH, and warn once if its
+ * version is outside TESTED_CLI_RANGE.
  * Throws with install instructions if not found.
  */
 export function validateCliPresence(): void {
+  let output: string;
   try {
-    execSync("claude --version", { stdio: "pipe", timeout: 5000 });
+    output = execSync("claude --version", {
+      stdio: "pipe",
+      timeout: 5000,
+    }).toString();
   } catch {
     throw new Error(
       "Claude Code CLI not found. Install it: npm install -g @anthropic-ai/claude-code\n" +
         "Then authenticate: claude auth login",
+    );
+  }
+
+  const version = output.match(/\d+\.\d+\.\d+/)?.[0];
+  const { min, maxExclusive } = TESTED_CLI_RANGE;
+  if (
+    !version ||
+    compareVersions(version, min) < 0 ||
+    compareVersions(version, maxExclusive) >= 0
+  ) {
+    console.warn(
+      `[pi-claude-subscription] Claude CLI version ${version ?? output.trim()} is outside the tested range ` +
+        `(>=${min} <${maxExclusive}); behavior may differ.`,
     );
   }
 }

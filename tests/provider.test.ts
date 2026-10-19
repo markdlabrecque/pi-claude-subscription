@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
@@ -17,14 +26,13 @@ vi.mock("cross-spawn", () => ({
     (proc as any).kill = vi.fn(() => {
       (proc as any).killed = true;
     });
-    (proc as any).pid = 99999;
     return proc;
   }),
 }));
 
 // Mock child_process.execSync for validateCliPresence/validateCliAuth
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(() => Buffer.from("1.0.0")),
+  execSync: vi.fn(() => Buffer.from("2.1.301")),
 }));
 
 // Mock @mariozechner/pi-ai
@@ -70,7 +78,24 @@ vi.mock("@mariozechner/pi-ai", () => ({
 }));
 
 import spawn from "cross-spawn";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { streamViaCli } from "../src/provider";
+
+// The mocked process never emits "close", so spawnClaude's private temp
+// directories are never removed. Keep them in a sandbox this file deletes.
+const realTmpdir = process.env.TMPDIR;
+let tmpSandbox: string;
+beforeAll(() => {
+  tmpSandbox = mkdtempSync(join(tmpdir(), "provider-test-"));
+  process.env.TMPDIR = tmpSandbox;
+});
+afterAll(() => {
+  if (realTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = realTmpdir;
+  rmSync(tmpSandbox, { recursive: true, force: true });
+});
 
 describe("provider registration (default export)", () => {
   it("registers provider with ID pi-claude-subscription", async () => {
@@ -771,6 +796,46 @@ describe("streamViaCli", () => {
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
     });
 
+    it("does NOT break-early for a CLI-internal tool (ToolSearch)", async () => {
+      const model = mockModels[0] as any;
+      streamViaCli(model, { messages: [{ role: "user", content: "Hi" }] });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const proc = (spawn as any).mock.results[0].value;
+      const lines = [
+        {
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_s",
+              name: "ToolSearch",
+            },
+          },
+        },
+        {
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        },
+        {
+          type: "stream_event",
+          event: {
+            type: "message_delta",
+            delta: { stop_reason: "tool_use" },
+            usage: { output_tokens: 1 },
+          },
+        },
+        { type: "stream_event", event: { type: "message_stop" } },
+      ];
+      for (const line of lines) proc.stdout.write(JSON.stringify(line) + "\n");
+      proc.stdout.end();
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+    });
+
     it("does NOT break-early when stream has no tool_use blocks", async () => {
       const model = mockModels[0] as any;
       const context = {
@@ -850,302 +915,6 @@ describe("streamViaCli", () => {
       vi.advanceTimersByTime(500);
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
     });
-
-    it("does NOT break-early for internal Claude Code tools (ToolSearch, Task, etc.)", async () => {
-      const model = mockModels[0] as any;
-      const context = {
-        messages: [{ role: "user", content: "Use weather tool" }],
-      };
-
-      streamViaCli(model, context);
-      await vi.advanceTimersByTimeAsync(0);
-
-      const proc = (spawn as any).mock.results[0].value;
-
-      const lines = [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { usage: { input_tokens: 10, output_tokens: 0 } },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: {
-              type: "tool_use",
-              id: "tool_ts",
-              name: "ToolSearch",
-            },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_delta",
-            delta: { stop_reason: "tool_use" },
-            usage: { output_tokens: 5 },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "message_stop" },
-        }),
-        JSON.stringify({
-          type: "result",
-          subtype: "success",
-          result: "ok",
-        }),
-      ];
-
-      for (const line of lines) {
-        proc.stdout.write(line + "\n");
-      }
-      proc.stdout.end();
-      await vi.advanceTimersByTimeAsync(100);
-
-      // Process should NOT have been killed at message_stop (ToolSearch is internal)
-      const killCalls = proc.kill.mock.calls;
-      const sigkillBeforeResult = killCalls.filter(
-        (call: any[]) => call[0] === "SIGKILL",
-      );
-      expect(sigkillBeforeResult).toHaveLength(0);
-
-      vi.advanceTimersByTime(500);
-      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
-    });
-
-    it("does NOT break-early for pi-known tools inside sub-agents (parent_tool_use_id set)", async () => {
-      const model = mockModels[0] as any;
-      const context = {
-        messages: [{ role: "user", content: "Run an agent" }],
-      };
-
-      streamViaCli(model, context);
-      await vi.advanceTimersByTimeAsync(0);
-
-      const proc = (spawn as any).mock.results[0].value;
-
-      // Top-level: Agent tool_use (not pi-known, no break-early)
-      // Then sub-agent uses Read (pi-known, but parent_tool_use_id is set)
-      // Then sub-agent message_stop (should NOT trigger break-early)
-      // Then top-level text response and message_stop (no tool_use, no break-early)
-      const lines = [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { usage: { input_tokens: 10, output_tokens: 0 } },
-          },
-          parent_tool_use_id: null,
-        }),
-        // Top-level: Agent tool call
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: {
-              type: "tool_use",
-              id: "agent_1",
-              name: "Agent",
-            },
-          },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_delta",
-            delta: { stop_reason: "tool_use" },
-            usage: { output_tokens: 5 },
-          },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "message_stop" },
-          parent_tool_use_id: null,
-        }),
-        // Sub-agent: Read tool (pi-known, but inside sub-agent)
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: {
-              type: "tool_use",
-              id: "read_1",
-              name: "Read",
-            },
-          },
-          parent_tool_use_id: "agent_1",
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "message_stop" },
-          parent_tool_use_id: "agent_1",
-        }),
-        // Top-level: final text response
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { usage: { input_tokens: 20, output_tokens: 0 } },
-          },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "text", text: "" },
-          },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "text_delta", text: "Agent found the code." },
-          },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { output_tokens: 10 },
-          },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "message_stop" },
-          parent_tool_use_id: null,
-        }),
-        JSON.stringify({
-          type: "result",
-          subtype: "success",
-          result: "Agent found the code.",
-        }),
-      ];
-
-      for (const line of lines) {
-        proc.stdout.write(line + "\n");
-      }
-      proc.stdout.end();
-      await vi.advanceTimersByTimeAsync(100);
-
-      // Should NOT have been killed at any message_stop (no top-level pi-known tools)
-      // The Read inside the sub-agent should be ignored for break-early
-      const killBeforeResult = proc.kill.mock.calls.filter(
-        (call: any[]) => call[0] === "SIGKILL",
-      );
-      expect(killBeforeResult).toHaveLength(0);
-
-      // Should have received the final text response
-      const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const textEvents = mockStream._events.filter(
-        (e: any) => e.type === "text_delta",
-      );
-      expect(textEvents.length).toBeGreaterThan(0);
-
-      vi.advanceTimersByTime(500);
-    });
-
-    it("does NOT break-early when only user MCP tools are seen (not custom-tools)", async () => {
-      const model = mockModels[0] as any;
-      const context = {
-        messages: [{ role: "user", content: "Use user MCP tool" }],
-      };
-
-      streamViaCli(model, context);
-      await vi.advanceTimersByTimeAsync(0);
-
-      const proc = (spawn as any).mock.results[0].value;
-
-      const lines = [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { usage: { input_tokens: 10, output_tokens: 0 } },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: {
-              type: "tool_use",
-              id: "tool_3",
-              name: "mcp__user-server__tool",
-              input: "",
-            },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_delta",
-            delta: { stop_reason: "tool_use" },
-            usage: { output_tokens: 5 },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "message_stop" },
-        }),
-        JSON.stringify({
-          type: "result",
-          subtype: "success",
-          result: "ok",
-        }),
-      ];
-
-      for (const line of lines) {
-        proc.stdout.write(line + "\n");
-      }
-      proc.stdout.end();
-      await vi.advanceTimersByTimeAsync(100);
-
-      // Process should NOT have been killed at message_stop (only user MCP tool)
-      const killCalls = proc.kill.mock.calls;
-      const sigkillBeforeResult = killCalls.filter(
-        (call: any[]) => call[0] === "SIGKILL",
-      );
-      expect(sigkillBeforeResult).toHaveLength(0);
-
-      // After cleanup grace period, process gets killed
-      vi.advanceTimersByTime(500);
-      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
-    });
   });
 
   describe("subprocess error handling", () => {
@@ -1222,6 +991,30 @@ describe("streamViaCli", () => {
       );
       expect(doneEvent).toBeDefined();
       expect(doneEvent.message.content).toBeDefined();
+    });
+
+    it("reports an error when subprocess is killed by a signal before any output", async () => {
+      const model = mockModels[0] as any;
+      const context = {
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      streamViaCli(model, context);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const proc = (spawn as any).mock.results[0].value;
+
+      // Killed by a signal: exit code is null and nothing was written
+      proc.stdout.end();
+      proc.emit("close", null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(100);
+
+      const mockStream = MockAssistantMessageEventStream.mock.instances[0];
+      const doneEvent = mockStream._events.find(
+        (e: any) => e.type === "done" && e.message,
+      );
+      expect(doneEvent).toBeDefined();
+      expect(JSON.stringify(doneEvent.message.content)).toContain("SIGKILL");
     });
 
     it("does not push error on normal close (code 0)", async () => {
@@ -1484,7 +1277,7 @@ describe("streamViaCli", () => {
   });
 
   describe("abort signal already aborted", () => {
-    it("kills subprocess immediately when signal is already aborted", async () => {
+    it("ends the stream without spawning when signal is already aborted", async () => {
       const model = mockModels[0] as any;
       const context = {
         messages: [{ role: "user", content: "Hello" }],
@@ -1492,15 +1285,31 @@ describe("streamViaCli", () => {
       const controller = new AbortController();
       controller.abort(); // Abort BEFORE calling streamViaCli
 
-      streamViaCli(model, context, { signal: controller.signal });
+      const stream = streamViaCli(model, context, {
+        signal: controller.signal,
+      }) as any;
       await vi.advanceTimersByTimeAsync(0);
 
-      const proc = (spawn as any).mock.results[0].value;
-      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(spawn).not.toHaveBeenCalled();
+      expect(stream.end).toHaveBeenCalledTimes(1);
+      expect(stream._events.at(-1).type).toBe("done");
+    });
 
-      // Clean up
-      proc.stdout.end();
-      await vi.advanceTimersByTimeAsync(100);
+    it("does not spawn when aborted while the relay is starting", async () => {
+      const model = mockModels[0] as any;
+      const context = {
+        messages: [{ role: "user", content: "Hello" }],
+      };
+      const controller = new AbortController();
+
+      const stream = streamViaCli(model, context, {
+        signal: controller.signal,
+      }) as any;
+      controller.abort(); // Relay startup is still pending
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(stream._events.at(-1).type).toBe("done");
     });
   });
 
@@ -1561,74 +1370,6 @@ describe("streamViaCli", () => {
   });
 
   describe("effectiveReason override logic", () => {
-    it("overrides toolUse stopReason to stop when no pi-known tool calls in content", async () => {
-      const model = mockModels[0] as any;
-      const context = {
-        messages: [{ role: "user", content: "Hello" }],
-      };
-
-      streamViaCli(model, context);
-      await vi.advanceTimersByTimeAsync(0);
-
-      const proc = (spawn as any).mock.results[0].value;
-
-      // Stream a sequence where Claude calls a user MCP tool (not pi-known)
-      // The event bridge filters it out so content has no toolCall items
-      const lines = [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { usage: { input_tokens: 10, output_tokens: 0 } },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: {
-              type: "tool_use",
-              id: "tool_user",
-              name: "mcp__user-server__tool",
-            },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_delta",
-            delta: { stop_reason: "tool_use" },
-            usage: { output_tokens: 5 },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "message_stop" },
-        }),
-        JSON.stringify({ type: "result", subtype: "success", result: "ok" }),
-      ];
-      for (const line of lines) {
-        proc.stdout.write(line + "\n");
-      }
-      proc.stdout.end();
-      await vi.advanceTimersByTimeAsync(100);
-
-      // Advance past cleanup
-      vi.advanceTimersByTime(500);
-
-      const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find((e: any) => e.type === "done");
-      expect(doneEvent).toBeDefined();
-      // Reason should be overridden to "stop" (not "toolUse")
-      expect(doneEvent.reason).toBe("stop");
-      expect(doneEvent.message.stopReason).toBe("stop");
-    });
-
     it("keeps toolUse stopReason when pi-known tool calls are present", async () => {
       const model = mockModels[0] as any;
       const context = {
@@ -1828,6 +1569,13 @@ describe("streamViaCli", () => {
   });
 
   describe("session resume via options.sessionId", () => {
+    beforeEach(() => {
+      process.env.PI_CLAUDE_SUBSCRIPTION_SESSION_MODE = "resume";
+    });
+    afterEach(() => {
+      delete process.env.PI_CLAUDE_SUBSCRIPTION_SESSION_MODE;
+    });
+
     it("passes --resume when sessionId option is provided on subsequent turn", async () => {
       const model = mockModels[0] as any;
       const context = {
@@ -1940,7 +1688,7 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    it("does not pass system prompt when resuming", async () => {
+    it("passes the system prompt again when resuming, with the snapshot off", async () => {
       const model = mockModels[0] as any;
       const context = {
         messages: [
@@ -1956,7 +1704,8 @@ describe("streamViaCli", () => {
 
       const args = (spawn as any).mock.calls[0][1] as string[];
       expect(args).toContain("--resume");
-      expect(args).not.toContain("--append-system-prompt");
+      expect(args).toContain("--system-prompt-file");
+      expect(args.join(" ")).toContain("--system-prompt-snapshot off");
 
       // Clean up
       const proc = (spawn as any).mock.results[0].value;

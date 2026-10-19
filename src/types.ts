@@ -12,6 +12,8 @@ export interface ClaudeResultMessage {
   subtype: "success" | "error" | `error_${string}`;
   is_error?: boolean;
   result?: string;
+  /** True when the CLI gave up (for example "Not logged in"). */
+  is_error?: boolean;
   error?: string;
   errors?: string[];
   session_id?: string;

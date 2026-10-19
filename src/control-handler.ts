@@ -10,6 +10,7 @@
 
 import type { ClaudeControlRequest } from "./types";
 import { CUSTOM_TOOLS_MCP_PREFIX } from "./tool-mapping.js";
+import { isDebugEnabled } from "./debug-log.js";
 
 export const TOOL_EXECUTION_DENIED_MESSAGE =
   "Tool execution is unavailable in this environment.";
@@ -44,7 +45,8 @@ export function handleControlRequest(
   if (!msg.request_id || !msg.request) {
     console.error(
       "[pi-claude-subscription] Malformed control_request: missing request_id or request object",
-      msg,
+      // The message may carry tool arguments: only log it in debug.
+      ...(isDebugEnabled() ? [msg] : []),
     );
     return false;
   }

@@ -14,6 +14,8 @@ vi.mock("cross-spawn", () => ({
       proc.killed = true;
     });
     proc.pid = 12345;
+    // Lets spawnClaude remove its private temp directory
+    setImmediate(() => proc.emit("close", 0, null));
     return proc;
   }),
 }));
@@ -25,9 +27,7 @@ vi.mock("node:child_process", () => ({
 
 import spawn from "cross-spawn";
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import {
   spawnClaude,
   writeUserMessage,
@@ -38,7 +38,8 @@ import {
   forceKillProcess,
   registerProcess,
   killAllProcesses,
-  cleanupSystemPromptFile,
+  onTerminalSignal,
+  installSignalCleanup,
 } from "../src/process-manager";
 
 describe("spawnClaude", () => {
@@ -83,37 +84,36 @@ describe("spawnClaude", () => {
     expect(options.stdio).toEqual(["pipe", "pipe", "pipe"]);
   });
 
-  it("passes cwd from options when provided", () => {
-    spawnClaude("claude-sonnet-4-5-20250929", undefined, {
-      cwd: "/custom/path",
-    });
-    const options = (spawn as any).mock.calls[0][2];
-    expect(options.cwd).toBe("/custom/path");
-  });
-
-  it("writes system prompt to temp file and passes path via --append-system-prompt", () => {
+  it("replaces Claude Code's system prompt with the one given", () => {
     spawnClaude("claude-sonnet-4-5-20250929", "You are a helpful assistant.");
     const args = (spawn as any).mock.calls[0][1] as string[];
 
-    expect(args).toContain("--append-system-prompt");
-    const idx = args.indexOf("--append-system-prompt");
-    expect(args[idx + 1]).toContain("pi-claude-subscription-sysprompt-");
-  });
-
-  it("temp file contains the system prompt text", () => {
-    spawnClaude("claude-sonnet-4-5-20250929", "You are a helpful assistant.");
-    const tmpFile = join(
-      tmpdir(),
-      `pi-claude-subscription-sysprompt-${process.pid}.txt`,
-    );
-    expect(existsSync(tmpFile)).toBe(true);
-    expect(readFileSync(tmpFile, "utf-8")).toBe("You are a helpful assistant.");
-  });
-
-  it("does not include --append-system-prompt when no system prompt", () => {
-    spawnClaude("claude-sonnet-4-5-20250929");
-    const args = (spawn as any).mock.calls[0][1] as string[];
     expect(args).not.toContain("--append-system-prompt");
+    const file = args[args.indexOf("--system-prompt-file") + 1];
+    expect(readFileSync(file, "utf-8")).toBe("You are a helpful assistant.");
+  });
+
+  it("keeps API keys and other providers out of the CLI's environment", () => {
+    const planted = {
+      ANTHROPIC_API_KEY: "sk-test",
+      ANTHROPIC_AUTH_TOKEN: "token",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+    };
+    Object.assign(process.env, planted);
+    try {
+      spawnClaude("claude-sonnet-4-5-20250929", undefined, {
+        baseUrl: "http://127.0.0.1:1",
+      });
+    } finally {
+      for (const key of Object.keys(planted)) delete process.env[key];
+    }
+    const env = (spawn as any).mock.calls[0][2].env;
+
+    for (const key of Object.keys(planted)) expect(env).not.toHaveProperty(key);
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:1");
+    expect(env.PATH).toBe(process.env.PATH);
   });
 
   it("returns the spawned ChildProcess", () => {
@@ -156,7 +156,7 @@ describe("effort flag", () => {
   });
 
   it("does NOT include --effort when effort is undefined", () => {
-    spawnClaude("claude-sonnet-4-5-20250929", undefined, { cwd: "/some/path" });
+    spawnClaude("claude-sonnet-4-5-20250929", undefined, {});
     const args = (spawn as any).mock.calls[0][1] as string[];
 
     expect(args).not.toContain("--effort");
@@ -170,12 +170,10 @@ describe("effort flag", () => {
   });
 
   it("is backward compatible - existing calls without effort still work", () => {
-    spawnClaude("claude-sonnet-4-5-20250929", "system prompt", {
-      cwd: "/path",
-    });
+    spawnClaude("claude-sonnet-4-5-20250929", "system prompt");
     const args = (spawn as any).mock.calls[0][1] as string[];
 
-    expect(args).toContain("--append-system-prompt");
+    expect(args).toContain("--system-prompt-file");
     expect(args).not.toContain("--effort");
   });
 });
@@ -318,7 +316,7 @@ describe("captureStderr", () => {
 
 describe("validateCliPresence", () => {
   it("does not throw when claude --version succeeds", () => {
-    (execSync as any).mockReturnValue(Buffer.from("1.0.0"));
+    (execSync as any).mockReturnValue(Buffer.from("2.1.301"));
     expect(() => validateCliPresence()).not.toThrow();
   });
 
@@ -335,6 +333,38 @@ describe("validateCliPresence", () => {
       expect(e.message).toContain("npm install");
     }
   });
+});
+
+describe("CLI version check", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn for a version inside the tested range", () => {
+    (execSync as any).mockReturnValue(Buffer.from("2.1.301 (Claude Code)\n"));
+    validateCliPresence();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["2.0.9", "2.2.0", "3.0.0"])(
+    "warns once for version %s outside the tested range",
+    (version) => {
+      (execSync as any).mockReturnValue(
+        Buffer.from(`${version} (Claude Code)\n`),
+      );
+      validateCliPresence();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`CLI version ${version}`),
+      );
+    },
+  );
 });
 
 describe("validateCliAuth", () => {
@@ -403,23 +433,13 @@ describe("mcp-config flag", () => {
     expect(args).not.toContain("--mcp-config");
   });
 
-  it("spawnClaude NEVER includes --strict-mcp-config in args", () => {
-    spawnClaude("claude-sonnet-4-5-20250929", undefined, {
-      mcpConfigPath: "/tmp/mcp-config.json",
-    });
-    const args = (spawn as any).mock.calls[0][1] as string[];
-
-    expect(args).not.toContain("--strict-mcp-config");
-  });
-
   it("backward compatibility - existing calls with only effort/cwd still work", () => {
     spawnClaude("claude-sonnet-4-5-20250929", "system prompt", {
-      cwd: "/path",
       effort: "high",
     });
     const args = (spawn as any).mock.calls[0][1] as string[];
 
-    expect(args).toContain("--append-system-prompt");
+    expect(args).toContain("--system-prompt-file");
     expect(args).toContain("--effort");
     expect(args).not.toContain("--mcp-config");
     expect(args).toContain("--permission-prompt-tool");
@@ -552,6 +572,60 @@ describe("process registry", () => {
   });
 });
 
+describe("terminal signal cleanup", () => {
+  beforeEach(() => {
+    killAllProcesses();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("kills the CLI process group when pi gets a terminal signal", () => {
+    const EventEmitter = require("node:events");
+    const proc = new EventEmitter();
+    proc.pid = 4242;
+    proc.killed = false;
+    proc.exitCode = null;
+    proc.kill = vi.fn();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    registerProcess(proc as unknown as ChildProcess);
+    onTerminalSignal("SIGTERM");
+
+    expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
+    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("keeps cleaning up on later signals when an app handler owns shutdown", () => {
+    const EventEmitter = require("node:events");
+    const before = process.listeners("SIGTERM");
+    const appHandler = vi.fn();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    process.on("SIGTERM", appHandler);
+    installSignalCleanup();
+    try {
+      for (const pid of [4343, 4444]) {
+        const proc = new EventEmitter();
+        proc.pid = pid;
+        proc.killed = false;
+        proc.exitCode = null;
+        proc.kill = vi.fn();
+        registerProcess(proc as unknown as ChildProcess);
+        process.emit("SIGTERM");
+        expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+      }
+      expect(appHandler).toHaveBeenCalledTimes(2);
+      expect(kill).not.toHaveBeenCalledWith(process.pid, "SIGTERM");
+    } finally {
+      for (const l of process.listeners("SIGTERM")) {
+        if (!before.includes(l)) process.removeListener("SIGTERM", l);
+      }
+    }
+  });
+});
+
 describe("resume session flag", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -595,28 +669,5 @@ describe("resume session flag", () => {
 
     expect(args).toContain("--resume");
     expect(args).toContain("--mcp-config");
-  });
-});
-
-describe("cleanupSystemPromptFile", () => {
-  const tmpFile = join(
-    tmpdir(),
-    `pi-claude-subscription-sysprompt-${process.pid}.txt`,
-  );
-
-  it("deletes the temp file when it exists", () => {
-    // Create the file by spawning with a system prompt
-    spawnClaude("claude-sonnet-4-5-20250929", "test prompt");
-    expect(existsSync(tmpFile)).toBe(true);
-
-    cleanupSystemPromptFile();
-    expect(existsSync(tmpFile)).toBe(false);
-  });
-
-  it("does not throw when file does not exist", () => {
-    // Ensure file doesn't exist
-    cleanupSystemPromptFile();
-    // Call again — should not throw
-    expect(() => cleanupSystemPromptFile()).not.toThrow();
   });
 });

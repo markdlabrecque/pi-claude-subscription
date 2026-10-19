@@ -1,4 +1,5 @@
 import type { NdjsonMessage } from "./types";
+import { DEBUG_ENV, isDebugEnabled } from "./debug-log.js";
 
 /**
  * Parse a single NDJSON line from Claude CLI stdout into a typed message.
@@ -24,7 +25,13 @@ export function parseLine(line: string): NdjsonMessage | null {
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    console.error("Failed to parse NDJSON line:", trimmed);
+    // The line may hold prompt text or tool arguments: only log it in debug.
+    console.error(
+      "Failed to parse NDJSON line:",
+      isDebugEnabled()
+        ? trimmed
+        : `(${trimmed.length} chars, set ${DEBUG_ENV}=1 to log)`,
+    );
     return null;
   }
 
