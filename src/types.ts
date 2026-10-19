@@ -10,7 +10,6 @@ export interface ClaudeStreamEventMessage {
 export interface ClaudeResultMessage {
   type: "result";
   subtype: "success" | "error" | `error_${string}`;
-  is_error?: boolean;
   result?: string;
   /** True when the CLI gave up (for example "Not logged in"). */
   is_error?: boolean;
