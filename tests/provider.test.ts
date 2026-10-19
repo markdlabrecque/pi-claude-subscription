@@ -302,6 +302,34 @@ describe("streamViaCli", () => {
     expect(mockStream.end).toHaveBeenCalled();
   });
 
+  it("surfaces CLI execution errors instead of returning an empty response", async () => {
+    streamViaCli(mockModels[0] as any, {
+      messages: [{ role: "user", content: "Hello" }],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const proc = (spawn as any).mock.results[0].value;
+    proc.stdout.end(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["No conversation found with session ID: missing"],
+      }) + "\n",
+    );
+    await vi.advanceTimersByTimeAsync(100);
+
+    const mockStream = MockAssistantMessageEventStream.mock.instances[0];
+    const doneEvent = mockStream._events.find((e: any) => e.type === "done");
+    expect(doneEvent.message.content).toEqual([
+      {
+        type: "text",
+        text: "Error: No conversation found with session ID: missing",
+      },
+    ]);
+    expect(mockStream.end).toHaveBeenCalledTimes(1);
+  });
+
   it("calls cleanupProcess after receiving result", async () => {
     const model = mockModels[0] as any;
     const context = {
@@ -1821,6 +1849,30 @@ describe("streamViaCli", () => {
       // Clean up
       const proc = (spawn as any).mock.results[0].value;
       proc.stdout.end();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    it("creates a session on the first turn with transcript system messages", async () => {
+      streamViaCli(
+        mockModels[0] as any,
+        {
+          messages: [
+            { role: "system", content: "Be helpful" },
+            { role: "user", content: "Hello" },
+          ],
+        },
+        { sessionId: "sess-first-turn" } as any,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const args = (spawn as any).mock.calls[0][1] as string[];
+      expect(args).not.toContain("--resume");
+      expect(args[args.indexOf("--session-id") + 1]).toBe("sess-first-turn");
+
+      const proc = (spawn as any).mock.results[0].value;
+      proc.stdout.end(
+        JSON.stringify({ type: "result", subtype: "success" }) + "\n",
+      );
       await vi.advanceTimersByTimeAsync(100);
     });
 

@@ -9,9 +9,11 @@ export interface ClaudeStreamEventMessage {
 
 export interface ClaudeResultMessage {
   type: "result";
-  subtype: "success" | "error";
+  subtype: "success" | "error" | `error_${string}`;
+  is_error?: boolean;
   result?: string;
   error?: string;
+  errors?: string[];
   session_id?: string;
 }
 

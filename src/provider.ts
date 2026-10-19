@@ -82,10 +82,11 @@ export function streamViaCli(
       const cwd = options?.cwd ?? process.cwd();
 
       // Resume if pi provides a session ID AND this isn't the first turn.
-      // Pi passes sessionId on every call (including first), but we can only
-      // --resume a CLI session that already exists on disk from a prior turn.
+      // Pi includes system messages even on the first turn. Only an assistant
+      // message indicates a prior turn, not the total transcript length.
       const resumeSessionId =
-        options?.sessionId && context.messages.length > 1
+        options?.sessionId &&
+        context.messages.some((message) => message.role === "assistant")
           ? options.sessionId
           : undefined;
 
@@ -271,8 +272,12 @@ export function streamViaCli(
         } else if (msg.type === "control_request") {
           handleControlRequest(msg, proc!.stdin!);
         } else if (msg.type === "result") {
-          if (msg.subtype === "error") {
-            endStreamWithError(msg.error ?? "Unknown error from Claude CLI");
+          if (msg.is_error || msg.subtype.startsWith("error")) {
+            endStreamWithError(
+              msg.error ||
+                msg.errors?.join("\n") ||
+                "Unknown error from Claude CLI",
+            );
           }
           // For both success and error: clean up the subprocess
           clearTimeout(inactivityTimer);
