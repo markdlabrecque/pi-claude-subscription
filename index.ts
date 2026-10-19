@@ -8,6 +8,7 @@
 import { getModels } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { streamViaCli } from "./src/provider.js";
+import { filterLatestPerFamily } from "./src/model-filter.js";
 import {
   validateCliPresence,
   validateCliAuth,
@@ -71,15 +72,17 @@ export default function (pi: ExtensionAPI) {
     validateCliPresence(); // throws if CLI not on PATH
     validateCliAuth(); // warns if not authenticated
 
-    const models = getModels("anthropic").map((model) => ({
-      id: model.id,
-      name: model.name,
-      reasoning: model.reasoning,
-      input: model.input,
-      cost: model.cost,
-      contextWindow: model.contextWindow,
-      maxTokens: model.maxTokens,
-    }));
+    const models = filterLatestPerFamily(
+      getModels("anthropic").map((model) => ({
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        input: model.input,
+        cost: model.cost,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+      })),
+    );
 
     // The pi-ai catalog may predate Fable; the CLI accepts it by alias.
     if (!models.some((m) => m.id.includes("fable"))) {
