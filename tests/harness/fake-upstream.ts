@@ -4,6 +4,7 @@ import type { AddressInfo, Socket } from "node:net";
 /** Scripted upstream behaviours. */
 export type Scenario =
   | "normal"
+  | "thinking_only"
   | "tool_call"
   | "made_up_tool"
   | "made_up_mcp_tool"
@@ -90,6 +91,9 @@ export async function startFakeUpstream(
           return; // never answer
         case "normal":
           body = message([{ type: "text", text: NORMAL_TEXT }], "end_turn");
+          break;
+        case "thinking_only":
+          body = message([{ type: "thinking", thinking: "" }], "end_turn");
           break;
         case "tool_call":
           body = toolUse("Read");

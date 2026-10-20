@@ -166,3 +166,26 @@ describe("upstream errors in a Pi turn", () => {
     expect(message.errorMessage).toContain("30");
   });
 });
+
+describe("thinking-only reply in a Pi turn", () => {
+  it("ends with an error event instead of an empty done, even when the CLI asks for a second request", async () => {
+    upstream = await startFakeUpstream(["thinking_only"]);
+    claude = installFakeClaude(upstream.url);
+    process.env.FAKE_CLAUDE_EXTRA_GENERATIONS = "1";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const stream = streamViaCli(model, {
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    const types: string[] = [];
+    for await (const e of stream) types.push((e as any).type);
+    const message: any = await stream.result();
+
+    expect(types[types.length - 1]).toBe("error");
+    expect(types).not.toContain("done");
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toMatch(/empty reply/);
+    expect(message.content).toEqual([]);
+    expect(upstream.requests).toHaveLength(1);
+  });
+});

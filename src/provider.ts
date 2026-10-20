@@ -446,6 +446,35 @@ export function streamViaCli(
       if (!streamEnded) {
         const output = bridge.getOutput();
 
+        // A thinking-only reply (no text, no tool call) leaves Pi with nothing
+        // to act on; the empty-signature thinking block can't be replayed
+        // either. End it as a real error so Pi can retry or report it.
+        const blocks = output.content ?? [];
+        const onlyEmptyThinking =
+          blocks.length > 0 &&
+          blocks.every(
+            (b: any) =>
+              b.type === "thinking" &&
+              !b.thinking &&
+              !b.thinkingSignature,
+          );
+        if (onlyEmptyThinking) {
+          streamEnded = true;
+          stream.push({
+            type: "error",
+            reason: "error",
+            error: {
+              ...output,
+              content: [],
+              stopReason: "error",
+              errorMessage:
+                "Claude returned an empty reply (thinking only, no text or tool call).",
+            },
+          } as any);
+          stream.end();
+          return false;
+        }
+
         streamEnded = true;
         stream.push({
           type: "done",
