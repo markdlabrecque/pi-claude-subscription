@@ -253,6 +253,15 @@ async function run(userMessage) {
       event({ type: "content_block_stop", index });
       return;
     }
+    if (block.type === "thinking") {
+      event({
+        type: "content_block_start",
+        index,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      event({ type: "content_block_stop", index });
+      return;
+    }
     event({
       type: "content_block_start",
       index,
