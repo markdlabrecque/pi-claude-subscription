@@ -91,6 +91,20 @@ describe("custom tool whose pi name contains mcp__ (#26)", () => {
     expect(result.content[0].name).toBe("mcp__t3-code__link_pull_request");
   });
 
+  it("resolves the name from the system message's toolsAdded, as Pi passes it (no context.tools)", async () => {
+    upstream = await startFakeUpstream(["t3_code_tool"]);
+    claude = installFakeClaude(upstream.url);
+
+    const result = await run({
+      messages: [
+        { role: "system", content: "", toolsAdded: tools, timestamp: 0 },
+        { role: "user", content: "Link it", timestamp: 1 },
+      ],
+    });
+
+    expect(result.content[0].name).toBe("mcp__t3-code__link_pull_request");
+  });
+
   it("stops a model that keeps re-issuing the same failing call", async () => {
     upstream = await startFakeUpstream(["made_up_tool"]);
     claude = installFakeClaude(upstream.url);
