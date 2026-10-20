@@ -8,6 +8,7 @@ export type Scenario =
   | "made_up_tool"
   | "made_up_mcp_tool"
   | "custom_tool"
+  | "t3_code_tool"
   | "401"
   | "429"
   | "503"
@@ -98,6 +99,9 @@ export async function startFakeUpstream(
           break;
         case "made_up_mcp_tool":
           body = toolUse("mcp__ghost-server__totally_made_up_tool");
+          break;
+        case "t3_code_tool":
+          body = toolUse("mcp__custom-tools__mcp__t3_code__link_pull_request");
           break;
         case "custom_tool":
           body = message(

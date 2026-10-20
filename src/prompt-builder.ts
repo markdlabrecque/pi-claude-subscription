@@ -15,6 +15,7 @@ import {
   mapPiToolNameToClaude,
   translatePiArgsToClaude,
   isCustomToolName,
+  CUSTOM_TOOLS_MCP_PREFIX,
 } from "./tool-mapping.js";
 
 /**
@@ -431,6 +432,48 @@ export function findUnsupportedAttachment(messages: any[]): string | null {
     : null;
 }
 
+/** Identical failed tool calls in a row before the provider stops the turn. */
+export const MAX_REPEATED_TOOL_FAILURES = 3;
+
+/**
+ * Describe a run of MAX_REPEATED_TOOL_FAILURES or more trailing tool results
+ * that failed with the same tool, arguments, and error, or null if there is
+ * none. Each retry re-sends the whole context, so a stuck model is costly.
+ */
+export function findRepeatedToolFailure(messages: any[]): string | null {
+  const callArgs = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content))
+      continue;
+    for (const block of message.content) {
+      if (block.type === "toolCall")
+        callArgs.set(block.id, JSON.stringify(block.arguments ?? {}));
+    }
+  }
+
+  let first: { toolName: string; signature: string; error: string } | null =
+    null;
+  let count = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role === "assistant") continue;
+    if (message.role !== "toolResult" || !message.isError) break;
+    const error = toolResultContentToText(message.content);
+    const signature = JSON.stringify([
+      message.toolName,
+      callArgs.get(message.toolCallId),
+      error,
+    ]);
+    if (!first) first = { toolName: message.toolName, signature, error };
+    else if (signature !== first.signature) break;
+    count++;
+  }
+
+  return first && count >= MAX_REPEATED_TOOL_FAILURES
+    ? `stopped after ${first.toolName} failed ${count} times in a row with the same arguments and error: ${first.error}`
+    : null;
+}
+
 /**
  * Find the index of the last user message in the messages array.
  * Returns -1 if no user message found.
@@ -546,12 +589,12 @@ function contentToText(content: string | any[]): string {
       if (block.type === "toolCall") {
         const isCustom = isCustomToolName(block.name);
         if (isCustom) {
-          // Custom tools: don't reference the MCP tool name — Claude might try to re-call it.
-          // Just note what was done. The result follows as a TOOL RESULT message.
+          // Custom tools: name the callable MCP name, marked as history, so
+          // the model never mistakes the bare pi name for one it can call.
           const argsStr = block.arguments
             ? JSON.stringify(block.arguments)
             : "{}";
-          return `[Used ${block.name} tool with args: ${argsStr}]`;
+          return `Historical tool call (non-executable): ${CUSTOM_TOOLS_MCP_PREFIX}${block.name} args=${argsStr}`;
         }
         const claudeName = mapPiToolNameToClaude(block.name);
         const claudeArgs =

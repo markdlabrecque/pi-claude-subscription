@@ -75,3 +75,47 @@ describe("tool call outside the offered inventory", () => {
     },
   );
 });
+
+describe("custom tool whose pi name contains mcp__ (#26)", () => {
+  const tools = [{ name: "read" }, { name: "mcp__t3-code__link_pull_request" }];
+
+  it("resolves an underscore-spelled call to the registered pi tool", async () => {
+    upstream = await startFakeUpstream(["t3_code_tool"]);
+    claude = installFakeClaude(upstream.url);
+
+    const result = await run({
+      messages: [{ role: "user", content: "Link it", timestamp: 1 }],
+      tools,
+    });
+
+    expect(result.content[0].name).toBe("mcp__t3-code__link_pull_request");
+  });
+
+  it("stops a model that keeps re-issuing the same failing call", async () => {
+    upstream = await startFakeUpstream(["made_up_tool"]);
+    claude = installFakeClaude(upstream.url);
+
+    const messages: any[] = [{ role: "user", content: "Yes", timestamp: 1 }];
+    let result: any;
+    for (let turn = 0; turn < 10; turn++) {
+      result = await run({ messages, tools });
+      if (result.stopReason !== "toolUse") break;
+      messages.push(result, {
+        role: "toolResult",
+        toolCallId: result.content[0].id,
+        toolName: result.content[0].name,
+        content: [
+          { type: "text", text: "Tool totally_made_up_tool not found" },
+        ],
+        isError: true,
+        timestamp: 2,
+      });
+    }
+
+    expect(upstream.requests).toHaveLength(3);
+    expect(result.stopReason).toBe("stop");
+    expect(result.content[0].text).toMatch(
+      /totally_made_up_tool failed 3 times in a row/,
+    );
+  });
+});

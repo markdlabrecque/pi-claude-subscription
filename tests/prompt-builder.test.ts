@@ -270,9 +270,9 @@ describe("buildPrompt", () => {
       } as unknown as any;
 
       const result = buildPrompt(context);
-      // Custom tool uses plain name format (not MCP-prefixed to avoid Claude re-calling)
-      expect(result).toContain("[Used custom_tool tool with args:");
-      expect(result).not.toContain("mcp__custom-tools__");
+      expect(result).toContain(
+        "Historical tool call (non-executable): mcp__custom-tools__custom_tool args=",
+      );
       expect(result).toContain('"key":"value"');
     });
 
@@ -647,9 +647,10 @@ describe("custom tool history replay", () => {
     } as unknown as any;
 
     const result = buildPrompt(context);
-    expect(result).toContain("[Used deploy tool with args:");
+    expect(result).toContain(
+      "Historical tool call (non-executable): mcp__custom-tools__deploy args=",
+    );
     expect(result).toContain('"target":"prod"');
-    expect(result).not.toContain("mcp__custom-tools__");
   });
 
   it("toolCall with built-in name 'read' still produces 'Read' (not MCP-prefixed)", () => {
