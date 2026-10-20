@@ -248,3 +248,23 @@ describe("tool-mapping", () => {
     });
   });
 });
+
+import { getPiToolNames } from "../src/tool-mapping";
+
+describe("getPiToolNames", () => {
+  it("reads toolsAdded/toolsRemoved from system messages", () => {
+    expect(
+      getPiToolNames({
+        messages: [
+          { role: "system", toolsAdded: [{ name: "a" }, { name: "b" }] },
+          { role: "system", toolsRemoved: [{ name: "a" }] },
+          { role: "user", content: "x" },
+        ],
+      }),
+    ).toEqual(["b"]);
+  });
+
+  it("prefers context.tools when present", () => {
+    expect(getPiToolNames({ messages: [], tools: [{ name: "z" }] })).toEqual(["z"]);
+  });
+});

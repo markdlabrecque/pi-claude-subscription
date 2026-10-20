@@ -31,7 +31,7 @@ import {
   findUnsupportedAttachment,
   findRepeatedToolFailure,
 } from "./prompt-builder.js";
-import { isInternalClaudeTool } from "./tool-mapping.js";
+import { getPiToolNames, isInternalClaudeTool } from "./tool-mapping.js";
 import {
   spawnClaude,
   writeUserMessage,
@@ -209,7 +209,7 @@ export function streamViaCli(
       const bridge = createEventBridge(
         stream,
         model,
-        context.tools?.map((tool) => tool.name),
+        getPiToolNames(context),
       );
 
       // Guard against double stream.end() and double error events.

@@ -154,3 +154,22 @@ export function translatePiArgsToClaude(
   }
   return result;
 }
+
+/**
+ * Names of the tools Pi can execute for this request. Pi folds tools into
+ * system messages (toolsAdded/toolsRemoved) before calling the provider, so
+ * context.tools is normally absent; it is used when present.
+ */
+export function getPiToolNames(context: {
+  messages: any[];
+  tools?: { name: string }[];
+}): string[] {
+  if (context.tools?.length) return context.tools.map((t) => t.name);
+  const names = new Set<string>();
+  for (const m of context.messages ?? []) {
+    if (m?.role !== "system") continue;
+    for (const t of m.toolsRemoved ?? []) names.delete(t.name);
+    for (const t of m.toolsAdded ?? []) names.add(t.name);
+  }
+  return [...names];
+}
