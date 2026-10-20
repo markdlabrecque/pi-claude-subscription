@@ -72,6 +72,7 @@ function mapStopReason(
 export function createEventBridge(
   stream: AssistantMessageEventStream,
   model: Model<any>,
+  piToolNames?: readonly string[],
 ): EventBridge {
   // Tracked content blocks indexed by Claude's content_block index
   const blocks: TrackedBlock[] = [];
@@ -184,7 +185,7 @@ export function createEventBridge(
       // The CLI runs its internal tools itself; pi must not see them
       if (isInternalClaudeTool(claudeName)) return;
 
-      const piName = mapClaudeToolNameToPi(claudeName);
+      const piName = mapClaudeToolNameToPi(claudeName, piToolNames);
       const id = event.content_block!.id!;
 
       const block: TrackedToolBlock = {

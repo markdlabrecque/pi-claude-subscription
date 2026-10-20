@@ -87,15 +87,25 @@ export function isInternalClaudeTool(claudeName: string): boolean {
 /**
  * Map a Claude tool name to the corresponding pi tool name.
  * Strips any mcp__<server>__ prefix first, then falls back to
- * case-insensitive built-in lookup. Never throws: unknown tool names
- * pass through unchanged so pi's unknown-tool error drives self-correction.
+ * case-insensitive built-in lookup. When pi's tool names are given and the
+ * result is not one of them, a pi name that differs only by "-" vs "_" wins
+ * (models call mcp__t3_code__x for pi's mcp__t3-code__x). Never throws:
+ * unknown tool names pass through so pi's unknown-tool error drives
+ * self-correction.
  */
-export function mapClaudeToolNameToPi(claudeName: string): string {
+export function mapClaudeToolNameToPi(
+  claudeName: string,
+  piToolNames?: readonly string[],
+): string {
   // e.g., "mcp__custom-tools__deploy" -> "deploy"
   const bare = claudeName.replace(MCP_PREFIX, "");
-  if (bare !== claudeName) return bare;
-  // Standard built-in tool mapping (case-insensitive)
-  return CLAUDE_TO_PI_NAME[claudeName.toLowerCase()] ?? claudeName;
+  const mapped =
+    bare !== claudeName
+      ? bare
+      : (CLAUDE_TO_PI_NAME[claudeName.toLowerCase()] ?? claudeName);
+  if (!piToolNames || piToolNames.includes(mapped)) return mapped;
+  const key = (name: string) => name.replace(/-/g, "_");
+  return piToolNames.find((name) => key(name) === key(mapped)) ?? mapped;
 }
 
 /**

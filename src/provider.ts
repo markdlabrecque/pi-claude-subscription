@@ -29,6 +29,7 @@ import {
   buildSystemPrompt,
   buildResumePrompt,
   findUnsupportedAttachment,
+  findRepeatedToolFailure,
 } from "./prompt-builder.js";
 import { isInternalClaudeTool } from "./tool-mapping.js";
 import {
@@ -87,7 +88,11 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
  */
 export function streamViaCli(
   model: Model<any>,
-  context: { messages: any[]; systemPrompt?: string },
+  context: {
+    messages: any[];
+    systemPrompt?: string;
+    tools?: { name: string }[];
+  },
   options?: StreamViaCLiOptions,
 ): AssistantMessageEventStream {
   // @ts-expect-error — tsc can't verify AssistantMessageEventStream is a value
@@ -133,6 +138,13 @@ export function streamViaCli(
       const unsupported = findUnsupportedAttachment(context.messages);
       if (unsupported) {
         endWithoutCli(`Error: ${unsupported}`);
+        return false;
+      }
+
+      // Stop a model stuck re-issuing the same failing tool call
+      const repeated = findRepeatedToolFailure(context.messages);
+      if (repeated) {
+        endWithoutCli(`Error: ${repeated}`);
         return false;
       }
 
@@ -194,7 +206,11 @@ export function streamViaCli(
       writeUserMessage(proc, prompt);
 
       // Create event bridge (before endStreamWithError so bridge is in scope)
-      const bridge = createEventBridge(stream, model);
+      const bridge = createEventBridge(
+        stream,
+        model,
+        context.tools?.map((tool) => tool.name),
+      );
 
       // Guard against double stream.end() and double error events.
       // First error path wins; subsequent ones are no-ops.
