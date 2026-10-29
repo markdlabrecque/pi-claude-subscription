@@ -8,7 +8,7 @@
  * IMPORTANT: The CLI does NOT support --thinking-budget. Only --effort is supported.
  */
 
-import type { ThinkingLevel, ThinkingBudgets } from "@mariozechner/pi-ai";
+import type { ThinkingLevel, ThinkingBudgets } from "@earendil-works/pi-ai";
 
 /** CLI effort levels accepted by the --effort flag */
 export type CliEffortLevel = "low" | "medium" | "high" | "max";
@@ -22,7 +22,8 @@ const STANDARD_EFFORT_MAP: Record<ThinkingLevel, CliEffortLevel> = {
   low: "low",
   medium: "medium",
   high: "high",
-  xhigh: "high", // non-Opus: silently downgrade (max not supported)
+  xhigh: "high", // preserve the existing non-Opus mapping
+  max: "max",
 };
 
 /**
@@ -35,6 +36,7 @@ const OPUS_EFFORT_MAP: Record<ThinkingLevel, CliEffortLevel> = {
   medium: "high", // shifted: standard high
   high: "max", // shifted: maximum capability
   xhigh: "max", // Opus gets max
+  max: "max",
 };
 
 /**

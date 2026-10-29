@@ -11,6 +11,15 @@ const { execSync, spawn } = require("node:child_process");
 const readline = require("node:readline");
 
 const args = process.argv.slice(2);
+// Startup probes must never inspect a real login or make a request.
+if (args[0] === "--version") {
+  process.stdout.write("2.1.312 (fake Claude Code)\n");
+  process.exit(0);
+}
+if (args[0] === "auth" && args[1] === "status") {
+  process.stdout.write(JSON.stringify({ loggedIn: true }) + "\n");
+  process.exit(0);
+}
 const flag = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;

@@ -35,7 +35,7 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => Buffer.from("2.1.301")),
 }));
 
-// Mock @mariozechner/pi-ai
+// Mock @earendil-works/pi-ai
 const mockModels = [
   {
     id: "claude-sonnet-4-5-20250929",
@@ -71,9 +71,13 @@ const { MockAssistantMessageEventStream } = vi.hoisted(() => {
   return { MockAssistantMessageEventStream };
 });
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  getModels: vi.fn(() => mockModels),
-  AssistantMessageEventStream: MockAssistantMessageEventStream,
+vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
+  anthropicProvider: () => ({ getModels: () => mockModels }),
+}));
+
+vi.mock("@earendil-works/pi-ai", () => ({
+  createAssistantMessageEventStream: () =>
+    new MockAssistantMessageEventStream(),
   calculateCost: vi.fn(),
 }));
 

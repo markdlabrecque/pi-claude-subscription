@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
-import { discoverAndLoadExtensions } from "@mariozechner/pi-coding-agent";
+import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 import { streamViaCli } from "../src/provider";
 import { getToolDefs } from "../src/mcp-config";
 import {
@@ -26,13 +26,13 @@ async function run(context: any) {
   return (await stream.result()) as any;
 }
 
-// The `hello` extension ships in @mariozechner/pi-coding-agent's examples:
+// The `hello` extension ships in @earendil-works/pi-coding-agent's examples:
 // the most real Pi extension with a custom tool that is installed here.
 const pkgDir = join(
   __dirname,
   "..",
   "node_modules",
-  "@mariozechner",
+  "@earendil-works",
   "pi-coding-agent",
 );
 const helloPath = join(pkgDir, "examples", "extensions", "hello.ts");

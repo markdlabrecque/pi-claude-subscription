@@ -12,7 +12,7 @@ The extension registers a custom pi provider, `pi-claude-subscription`. Each req
 
 This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` packages are no longer supported. We will not maintain a dual-version adapter or a 0.52 compatibility test suite. See [ADR-0001](docs/adr/0001-pi-1x-only-support.md) for the decision.
 
-The SDK migration is not complete. The current source and package metadata still use the 0.52 SDK, and known Pi 1.x gaps include instruction forwarding and current-request tool inventory. This decision does not certify the current release as Pi 1.x compatible. The migration must document the minimum supported and tested 1.x versions and verify them in CI before claiming support.
+The source and test dependencies now use Pi AI and coding-agent 1.4.0. A registered-provider text smoke test runs against the locally installed SDK with a fake CLI and upstream. Startup model selection, thinking capabilities and normalized tool-turn CI verification are still in progress. This is not a claim of complete Pi 1.x compatibility. Instruction forwarding and current-request tool inventory remain separate follow-ups.
 
 ## Requirements
 

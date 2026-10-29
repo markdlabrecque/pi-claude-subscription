@@ -74,17 +74,15 @@ const { streamViaCli } = await import("../../src/provider.js");
 const { writeMcpConfig, removeMcpConfig } =
   await import("../../src/mcp-config.js");
 
-const model: any = {
-  id: "haiku",
-  name: "Claude Haiku",
-  api: "anthropic-messages",
-  provider: "pi-claude-subscription",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
+const { normalizeContext } = await import("@earendil-works/pi-ai");
+const { anthropicProvider } =
+  await import("@earendil-works/pi-ai/providers/anthropic");
+const { filterLatestPerFamily } = await import("../../src/model-filter.js");
+const catalogModel = filterLatestPerFamily([
+  ...anthropicProvider().getModels(),
+]).find((model) => model.id.includes("haiku"));
+if (!catalogModel) throw new Error("Installed Pi SDK has no Haiku model");
+const model = { ...catalogModel, provider: "pi-claude-subscription" };
 
 const toolDefs = [
   {
@@ -142,9 +140,13 @@ async function turn(
   const started = Date.now();
   let message: any;
   try {
-    const stream = streamViaCli(model, { messages, systemPrompt }, {
-      mcpConfigPath,
-    } as any);
+    const stream = streamViaCli(
+      model,
+      normalizeContext({ messages, systemPrompt }),
+      {
+        mcpConfigPath,
+      } as any,
+    );
     for await (const _ of stream);
     message = await stream.result();
   } finally {
