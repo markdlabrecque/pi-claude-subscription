@@ -37,7 +37,8 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 ## Settings
 
-- Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
+- Models come from the installed SDK's Anthropic catalog, with one latest entry per Haiku, Sonnet, Opus and Fable family. Catalog image limits, context/output limits and cost metadata are retained. Fable uses catalog metadata, not a synthetic alias.
+- Thinking levels respect catalog exclusions. Existing mappings remain: minimal/low use CLI low; medium/high use medium/high outside Opus; non-Opus xhigh uses high. Opus medium uses high and high/xhigh use max. Explicit max uses max only for a catalog model declaring max support; unknown models cannot gain max through a family-name substring. Off, when supported, and an unspecified level omit the CLI effort flag, not a promise to disable CLI thinking. Custom token budgets remain unsupported and produce a warning. These mappings were exercised with the fake CLI, using the effort flag vocabulary inspected from Claude Code 2.1.312 help, not live reasoning-quality tests.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
 - Request timeout: a request is stopped after 10 minutes by default. Set `PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS` to a number of milliseconds to change it (invalid or non-positive values use the default). It is read on every request. On timeout, or when Pi cancels, the whole CLI process tree is killed (process group on macOS/Linux), and the temp directory and relay port are released.
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.

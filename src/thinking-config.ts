@@ -8,14 +8,20 @@
  * IMPORTANT: The CLI does NOT support --thinking-budget. Only --effort is supported.
  */
 
-import type { ThinkingLevel, ThinkingBudgets } from "@earendil-works/pi-ai";
+import type {
+  ThinkingLevel,
+  ThinkingBudgets,
+  Model,
+  ThinkingLevelMap,
+} from "@earendil-works/pi-ai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 
 /** CLI effort levels accepted by the --effort flag */
 export type CliEffortLevel = "low" | "medium" | "high" | "max";
 
 /**
  * Standard model mapping: pi ThinkingLevel -> CLI effort.
- * Non-Opus models never receive "max" (would cause CLI error).
+ * Existing non-Opus levels retain their mapping. Explicit max requires catalog support.
  */
 const STANDARD_EFFORT_MAP: Record<ThinkingLevel, CliEffortLevel> = {
   minimal: "low",
@@ -38,6 +44,24 @@ const OPUS_EFFORT_MAP: Record<ThinkingLevel, CliEffortLevel> = {
   xhigh: "max", // Opus gets max
   max: "max",
 };
+
+/** Describe Pi levels using CLI efforts, retaining catalog capability exclusions.
+ * Direct-API effort values are not automatically CLI effort values.
+ */
+export function getCliThinkingLevelMap(model: Model<any>): ThinkingLevelMap {
+  const map = isOpusModel(model.id) ? OPUS_EFFORT_MAP : STANDARD_EFFORT_MAP;
+  const levels = { ...model.thinkingLevelMap };
+  for (const level of Object.keys(map) as ThinkingLevel[]) {
+    if (levels[level] === null) continue;
+    // Extended levels are opt-in in the SDK. Do not invent support.
+    if ((level === "xhigh" || level === "max") && levels[level] === undefined)
+      continue;
+    const effort = map[level];
+    levels[level] =
+      effort === "max" && model.thinkingLevelMap?.max !== "max" ? null : effort;
+  }
+  return levels;
+}
 
 /**
  * Detect whether a model ID refers to an Opus model.
@@ -81,5 +105,19 @@ export function mapThinkingEffort(
 
   const isOpus = modelId ? isOpusModel(modelId) : false;
   const map = isOpus ? OPUS_EFFORT_MAP : STANDARD_EFFORT_MAP;
-  return map[reasoning];
+  const effort = map[reasoning];
+  if (effort === "max") {
+    // A family substring is not evidence of max support. Dated catalog IDs
+    // share the capability of their undated model, not arbitrary future models.
+    const id = modelId?.replace(/-\d{8}$/, "");
+    const model = anthropicProvider()
+      .getModels()
+      .find((m) => m.id.replace(/-\d{8}$/, "") === id);
+    if (model?.thinkingLevelMap?.max !== "max") {
+      throw new Error(
+        `CLI max effort is not verified for model ${modelId ?? "(unspecified)"}`,
+      );
+    }
+  }
+  return effort;
 }
