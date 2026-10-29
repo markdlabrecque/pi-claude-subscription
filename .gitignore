@@ -3,4 +3,5 @@ dist/
 coverage/
 *.tsbuildinfo
 .claude/settings.local.json
+/.claude/worktrees/
 /AGENTS.override.md

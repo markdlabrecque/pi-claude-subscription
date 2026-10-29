@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Benchmark Tickets Plan</title>
+<link rel="stylesheet" href="../../../../skills/html-plan/runtime/htmlplan.css">
+<script src="../../../../skills/html-plan/runtime/htmlplan.js" defer></script>
+<body>
+
+<header>
+  <h1>Cache and Packaging Fixes in pi-claude-subscription</h1>
+  <doc-changes new="2" changed="12" deleted="1"></doc-changes>
+  <details class="thread"><summary>Why · 4 requests</summary>
+    <doc-quote via="prompt" from="the user">I want to do some benchmarking on cache-hits when using this extension.</doc-quote>
+    <doc-quote via="prompt" from="the user">Were there any measured cache misses that fell within the hour that should have been a cache hit?</doc-quote>
+    <doc-quote via="prompt" from="the user">let's log the issues exposed by this benchmark now.</doc-quote>
+    <doc-quote via="prompt" from="the user">these tickets</doc-quote>
+  </details>
+</header>
+
+<main>
+<doc-plan>
+
+<!-- ═════ 1 · #32 #33 ═════ -->
+<doc-claim>
+  <p>Each turn reads the full previous prompt from the cache.</p>
+  <doc-mock frame="terminal" title="analyze.py · target for #32 and #33" w="470" caption="Target: on each turn after the first, read is equal to or more than expect."><template><span class="dim">$</span> python3 -I analyze.py SESSIONS --detail 1
+    #    read   write  expect  verdict
+    0       0    6018       0  FIRST
+    1    6018    1384    6018  <span class="g">FULL</span>
+    2    7402     524    7402  <span class="g">FULL</span>
+    3    7926     578    7926  <span class="g">FULL</span>
+<span class="dim">today: every row is PART, 335 to 1,826 tokens short</span></template></doc-mock>
+
+  <doc-claim>
+    <p>A local proxy records two requests in sequence for a diff.</p>
+    <doc-calls title="Request capture" caption="The relay already sends to ANTHROPIC_BASE_URL. No product code changes.">
+<script type="text/plain">
++ **cache-probe** proxy on 127.0.0.1           @ scripts/cache-probe/proxy.ts:1    -- writes each body to a local folder
+    startRelay() reads ANTHROPIC_BASE_URL      @ src/relay.ts:105
+    forward(req, res)                          @ src/relay.ts:117
++ **diffRequests**(a, b)                       @ scripts/cache-probe/proxy.ts:40   -- prints the first block that differs
+</script>
+    </doc-calls>
+    <doc-claim at="scripts/cache-probe/proxy.ts:1">
+      <p><b>proxy.ts:1</b> · cache-probe</p>
+      <doc-code title="proxy.ts · sketch" lang="ts">
+<script type="text/plain">
+// Dev script only. Not in the npm package. Captures hold prompt text:
+// keep them in /tmp and never commit them.
+const OUT = mkdtempSync(join(tmpdir(), "cache-probe-"));
+let n = 0;
+createServer((req, res) => {
+  const chunks: Buffer[] = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    const body = Buffer.concat(chunks);
+    if (req.url?.startsWith("/v1/messages"))
+      writeFileSync(join(OUT, `${++n}.json`), body);   // body only, never headers
+    pipeTo("https://api.anthropic.com", req, body, res);
+  });
+}).listen(0, "127.0.0.1");
+</script>
+        <doc-pin line="11" tone="warn" title="Headers hold the OAuth token">The proxy must not write them.</doc-pin>
+      </doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The system prompt does not change at the first tool result.</p>
+    <doc-code src="src/prompt-builder.ts" lines="516-530" hl="518">
+      <doc-pin line="518" tone="risk" title="Likely cause of #33">The line appears only when a tool result is in the history.</doc-pin>
+    </doc-code>
+    <doc-ask id="toolline">
+      <p>What does replay do with the tool-result line?</p>
+      <label><input type="radio" name="toolline" value="always" checked> Send it on every replay request <small>one more line on the first turns</small></label>
+      <label><input type="radio" name="toolline" value="drop"> Do not send it in replay <small>the replay line already covers tool results</small></label>
+    </doc-ask>
+    <div data-if="toolline=drop"><doc-note tone="warn">Then the model loses the rule not to call a tool again. <code>findRepeatedToolFailure()</code> still stops loops.</doc-note></div>
+    <doc-claim at="src/prompt-builder.ts:516">
+      <p><b>prompt-builder.ts:516</b> · buildSystemPrompt()</p>
+      <doc-code diff file="src/prompt-builder.ts" start="516" lang="ts">
+<script type="text/plain">
+-  // When conversation history has tool results, instruct Claude to use them
+-  // instead of trying to re-call tools (which may not be available).
+-  if (context.messages?.some((m: any) => m.role === "toolResult")) {
++  // Replay sends this line on every request, so the system prompt stays the
++  // same at the first tool result and the cached prefix survives.
++  if (replay || context.messages?.some((m: any) => m.role === "toolResult")) {
+     parts.push(
+</script>
+      </doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The diff finds the 337 tokens that each turn writes again.</p>
+    <doc-code title="the check for #32 · sketch" lang="sh">
+<script type="text/plain">
+# two turns in one pi session, through the probe
+ANTHROPIC_BASE_URL=http://127.0.0.1:$PROBE_PORT pi
+npx tsx scripts/cache-probe/proxy.ts diff "$OUT/1.json" "$OUT/2.json"
+# expected output: the block index where turn 1 and turn 2 differ,
+# and the token count from that block to the end of turn 1
+</script>
+    </doc-code>
+    <doc-ask id="tail">
+      <p>If the CLI adds the last 337 tokens, what then?</p>
+      <label><input type="radio" name="tail" value="close" checked> Close #32 with a note <small>approximately 1% of prompt tokens</small></label>
+      <label><input type="radio" name="tail" value="split"> Send the history as separate messages <small>a large replay change; a new ticket</small></label>
+    </doc-ask>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 2 · #34 ═════ -->
+<doc-claim>
+  <p>The cost of a cache write uses the 1-hour rate.</p>
+  <doc-mock frame="terminal" title="pi usage · #34" w="470" caption="Opus, one turn that writes 6,018 tokens to the cache."><template>cache write   6,018 tokens
+  now        <span class="r">$0.0301</span>  <span class="dim">5-minute rate, 1.25 × input</span>
+  proposed   <span class="g">$0.0481</span>  <span class="dim">1-hour rate, 2 × input</span></template></doc-mock>
+
+  <doc-claim>
+    <p>ClaudeUsage reads the 5-minute and 1-hour split.</p>
+    <doc-schema id="usage" lang="ts" diff title="src/types.ts · ClaudeUsage" caption="First, make sure that the CLI stream sends cache_creation.">
+<script type="text/plain">
+ export interface ClaudeUsage {
+   input_tokens?: number;
+   output_tokens?: number;
+   cache_read_input_tokens?: number;
+   cache_creation_input_tokens?: number;
++  cache_creation?: {
++    ephemeral_5m_input_tokens?: number;
++    ephemeral_1h_input_tokens?: number;
++  };
+ }
+</script>
+    </doc-schema>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The bridge prices 1-hour tokens at 2 × the input rate.</p>
+    <doc-calls title="Pricing" caption="Both places that call calculateCost() get the same fix.">
+<script type="text/plain">
+~ handleMessageStart(event)                    @ src/event-bridge.ts:131
+    calculateCost(model, output.usage)         @ src/event-bridge.ts:143
++   **priceOneHourWrites**(usage)              @ src/event-bridge.ts:144
+~ handleMessageDelta(event)                    @ src/event-bridge.ts:355
+    calculateCost(model, output.usage)         @ src/event-bridge.ts:370
++   priceOneHourWrites(lastSplit)              @ src/event-bridge.ts:371   -- the delta has no split; keep the start one
+</script>
+    </doc-calls>
+    <doc-ask id="rates">
+      <p>Build the 1-hour price now, or wait for #39?</p>
+      <label><input type="radio" name="rates" value="now" checked> Build now, on the pi-ai 0.52 input rates</label>
+      <label><input type="radio" name="rates" value="wait"> Wait for #39 <small>claim 2 waits</small></label>
+    </doc-ask>
+    <doc-claim at="src/event-bridge.ts:144">
+      <p><b>event-bridge.ts:144</b> · priceOneHourWrites()</p>
+      <doc-code title="event-bridge.ts · sketch" lang="ts">
+<script type="text/plain">
+function priceOneHourWrites(split: ClaudeUsage["cache_creation"]): void {
+  const oneHour = split?.ephemeral_1h_input_tokens;
+  if (oneHour == null) return;            // no split: keep the cacheWrite rate
+  const fiveMin = split?.ephemeral_5m_input_tokens ?? 0;
+  const c = output.usage.cost;
+  c.cacheWrite =
+    (model.cost.cacheWrite * fiveMin + 2 * model.cost.input * oneHour) / 1e6;
+  c.total = c.input + c.output + c.cacheRead + c.cacheWrite;
+}
+</script>
+        <doc-pin line="3" tone="ok" title="Old behaviour when the split is absent"></doc-pin>
+      </doc-code>
+    </doc-claim>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 3 · #36 ═════ -->
+<doc-claim>
+  <p>Tests show what the user sees when Claude Code retries.</p>
+  <doc-mock frame="terminal" title="vitest · #36" w="470" caption="Each test records the counts and the error. The guard stays as it is."><template><span class="g">✓</span> 529, then a CLI retry
+    <span class="dim">upstream 1 · rejected 1 · pi error: record it</span>
+<span class="g">✓</span> stream cut before message_stop
+    <span class="dim">upstream 1 · rejected ? · pi error: record it</span>
+<span class="g">✓</span> stop_reason max_tokens
+    <span class="dim">upstream 1 · rejected ? · reply cut: record it</span></template></doc-mock>
+
+  <doc-claim>
+    <p>The fake upstream gets two new cases.</p>
+    <doc-schema id="scenario" lang="ts" diff title="tests/harness/fake-upstream.ts · Scenario" caption="The 529 case exists. The fake CLI already retries a 5xx once.">
+<script type="text/plain">
+ export type Scenario =
+   | "normal"
+   // … 13 more
+   | "529"
++  | "max_tokens"   // text, then stop_reason "max_tokens"
++  | "cut_stream"   // the socket closes in the middle of the body
+   | "hang";
+</script>
+    </doc-schema>
+  </doc-claim>
+
+  <doc-claim>
+    <p>A draft ADR lists the options. The maintainer decides.</p>
+    <doc-code title="docs/adr/0001-relay-retries.md · sketch" lang="md">
+<script type="text/plain">
+# 1. Retries and continuations through the relay
+Status: Proposed
+
+## Findings
+| Case        | Upstream | Rejected | pi gets | The user sees |
+| 529 + retry |          |          |         |               |
+| cut stream  |          |          |         |               |
+| max_tokens  |          |          |         |               |
+
+## Options
+1. Keep the hard cap.
+2. Do not count a failed response (status >= 400 or cut stream).
+3. Let a small number of max_tokens continuations through.
+</script>
+    </doc-code>
+    <doc-ask id="realcli">
+      <p>Also test the real CLI against a local 529 upstream?</p>
+      <label><input type="radio" name="realcli" value="yes" checked> Yes, with a local fake upstream <small>no request goes to Anthropic</small></label>
+      <label><input type="radio" name="realcli" value="no"> No, the fake CLI is enough</label>
+    </doc-ask>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 4 · #37 ═════ -->
+<doc-claim>
+  <p>A CLI started from Claude Code does not say it is Claude Code.</p>
+  <doc-mock frame="terminal" title="#37" w="470" caption="The two names stay in pi. The child CLI does not get them."><template><span class="dim">$</span> CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli pi
+<span class="dim">env of the child claude -p:</span>
+  ANTHROPIC_BASE_URL=http://127.0.0.1:41234
+  <span class="r">CLAUDECODE</span>              <span class="g">removed</span>
+  <span class="r">CLAUDE_CODE_ENTRYPOINT</span>  <span class="g">removed</span></template></doc-mock>
+
+  <doc-claim>
+    <p>STRIPPED_ENV gets two more names.</p>
+    <doc-code diff file="src/process-manager.ts" start="15" lang="ts">
+<script type="text/plain">
+-const STRIPPED_ENV = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
++const STRIPPED_ENV = new Set([
++  "ANTHROPIC_API_KEY",
++  "ANTHROPIC_AUTH_TOKEN",
++  // A CLI started from inside Claude Code must not take its identity
++  "CLAUDECODE",
++  "CLAUDE_CODE_ENTRYPOINT",
++]);
+</script>
+    </doc-code>
+    <doc-claim at="tests/process-manager.test.ts:96">
+      <p><b>process-manager.test.ts:96</b> · the env test</p>
+      <doc-code src="tests/process-manager.test.ts" lines="96-117" hl="97-103">
+        <doc-pin line="102" title="Add the two names here">The loop at line 114 then checks them.</doc-pin>
+      </doc-code>
+    </doc-claim>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 5 · #38 ═════ -->
+<doc-claim>
+  <p>The npm package holds only the files that pi loads.</p>
+  <doc-mock frame="terminal" title="#38" w="470" caption="Today 437 of the 568 files come from the untracked .claude/ worktrees."><template><span class="dim">$</span> npm pack --dry-run
+  now       <span class="r">568 files · 825.2 kB</span>
+  proposed  <span class="g">22 files</span>  <span class="dim">index.ts, src/ (18), README, LICENSE, package.json</span></template></doc-mock>
+
+  <doc-claim>
+    <p>package.json lists the files to publish.</p>
+    <doc-code diff file="package.json" start="9" lang="json">
+<script type="text/plain">
+   "pi": {
+     "extensions": [
+       "index.ts"
+     ]
+   },
++  "files": [
++    "index.ts",
++    "src/",
++    "README.md",
++    "LICENSE"
++  ],
+   "repository": {
+</script>
+    </doc-code>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The session dump goes. A person reads it first.</p>
+    <doc-tree caption="The agent writes a comment on #38 if the file holds private text.">
+<script type="text/plain">
+./
+  - 2026-03-17-143653-pi-claude-cli-sessions.txt   # 73 KB, added in 368fafe
+  test-tool-extension.ts                           # stays in git, not in the package
+</script>
+    </doc-tree>
+  </doc-claim>
+
+  <doc-claim>
+    <p>Git ignores the agent worktrees in <code>.claude/worktrees/</code>.</p>
+    <doc-code diff file=".gitignore" start="1" lang="sh">
+<script type="text/plain">
+ node_modules/
+ dist/
+ coverage/
+ *.tsbuildinfo
+ .claude/settings.local.json
++.claude/worktrees/
+</script>
+    </doc-code>
+    <doc-ask id="ignore">
+      <p>Must git ignore the agent worktrees?</p>
+      <label><input type="radio" name="ignore" value="yes" checked> Yes <small>437 untracked files today</small></label>
+      <label><input type="radio" name="ignore" value="no"> No <small>the files list keeps them out of npm</small></label>
+    </doc-ask>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ shared · not changing ═════ -->
+<doc-claim aux="shared">
+  <p>Shared: the relay sends to ANTHROPIC_BASE_URL when it is set.</p>
+  <doc-code src="src/relay.ts" lines="103-106" hl="105" caption="Claims 1.1 and 3.2 put a local server here. No product code changes.">
+  </doc-code>
+</doc-claim>
+
+<doc-claim aux="scope">
+  <p>Not changing: the one-request guard, resume mode, git history.</p>
+  <ul>
+    <li>The relay guard stays as it is. Claim 3 only records facts and drafts an ADR.</li>
+    <li>#35 needs you: compare plan usage and extra usage on claude.ai.</li>
+    <li>#39 needs a decision on the pi version. This plan stays on pi 0.52.</li>
+    <li>No rewrite of git history for the session dump.</li>
+    <li>Resume mode and its prompt builder do not change.</li>
+  </ul>
+</doc-claim>
+
+</doc-plan>
+</main>
+</body>
+</html>

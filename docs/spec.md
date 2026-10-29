@@ -14,6 +14,20 @@ The upstream `pi-claude-cli` provider gets close, but Claude Code can interfere 
 
 Pi sessions often run unattended in lightweight containers, so any failure that needs a human to notice is a bug.
 
+## Supported Pi versions
+
+The accepted support policy is **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` SDK are unsupported. Do not add dual-version adapters, legacy context fallbacks or a 0.52 test matrix. [ADR-0001](adr/0001-pi-1x-only-support.md) records the decision and trade-offs.
+
+This is the target contract, not a claim that the current implementation has completed the migration. Before declaring Pi 1.x support:
+
+- Migrate imports, dependency metadata, model catalog access and provider registration to the 1.x SDK.
+- Read effective system instructions and tools from normalized transcript messages using the supported SDK helpers. Preserve instruction updates, tool loadout changes and Pi's workspace while retaining CLI isolation.
+- Verify model capabilities and thinking-level mapping, terminal events, cancellation and usage against the supported SDK.
+- Honor supported provider observation hooks and provider-scoped environment options. Document CLI limitations and warn about unsupported request mutation rather than promising native-provider parity.
+- Record a minimum supported 1.x version and exact tested versions. Install reproducible SDK test dependencies in CI; compatibility tests must not silently skip because a developer's global Pi installation is absent.
+
+Support does not automatically extend to Pi-derived hosts or every 1.x release. Subscription billing-pool verification remains a separate human acceptance check.
+
 ## Solution
 
 A renamed fork of `rchern/pi-claude-cli` (package `pi-claude-subscription`) that installs beside the original. Claude Code carries exactly one model request per Pi turn and returns text, thinking and tool calls, nothing more.
@@ -118,6 +132,7 @@ Core behaviour:
 
 ## Out of Scope
 
+- Pi 0.52 support, legacy `@mariozechner/*` SDK compatibility and dual-version maintenance.
 - Running Claude Code's own tools or sub-agents through Pi. Pi stays the only harness.
 - Publishing to npm or the Pi package site.
 - Falling back to an Anthropic API key. Pi's own Anthropic provider covers that.

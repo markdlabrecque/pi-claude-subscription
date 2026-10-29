@@ -1,6 +1,6 @@
 # pi-claude-subscription
 
-A [pi](https://github.com/mariozechner/pi-coding-agent) extension that routes LLM calls through the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) as a subprocess. Use your Claude Pro/Max subscription as the LLM backend — no API key, no separate billing.
+A [Pi](https://github.com/earendil-works/pi) extension that routes LLM calls through the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) as a subprocess. Use your Claude Pro/Max subscription as the LLM backend — no API key, no separate billing.
 
 This is a fork of [rchern/pi-claude-cli](https://github.com/rchern/pi-claude-cli), renamed so it installs beside the original. Credit for the original design and implementation goes to its author. The MIT licence is kept (see [LICENSE](LICENSE)).
 
@@ -8,16 +8,22 @@ This is a fork of [rchern/pi-claude-cli](https://github.com/rchern/pi-claude-cli
 
 The extension registers a custom pi provider, `pi-claude-subscription`. Each request spawns a `claude -p` subprocess using the stream-json wire protocol, and by default rebuilds the full Pi history into that one call (`replay`), so no CLI session state is needed. `resume` mode reuses the CLI's session with `--resume` instead. Claude proposes tool calls, pi executes them natively. Custom pi tools are exposed to Claude via a schema-only MCP server.
 
+## Pi version support
+
+This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` packages are no longer supported. We will not maintain a dual-version adapter or a 0.52 compatibility test suite. See [ADR-0001](docs/adr/0001-pi-1x-only-support.md) for the decision.
+
+The SDK migration is not complete. The current source and package metadata still use the 0.52 SDK, and known Pi 1.x gaps include instruction forwarding and current-request tool inventory. This decision does not certify the current release as Pi 1.x compatible. The migration must document the minimum supported and tested 1.x versions and verify them in CI before claiming support.
+
 ## Requirements
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude auth login`; `claude` on PATH)
 - A Claude Pro or Max subscription
-- [pi](https://github.com/mariozechner/pi-coding-agent) or [GSD](https://github.com/gsd-build/gsd-2)
+- [Pi 1.x](https://github.com/earendil-works/pi), subject to the migration status above. Compatibility with GSD or other Pi-derived hosts is not implied.
 - macOS or Linux. On Windows, use WSL.
 
 ## Setup
 
-Add to `~/.gsd/agent/settings.json`:
+After the Pi 1.x migration is verified, add to `~/.pi/agent/settings.json`:
 
 ```json
 {
@@ -42,7 +48,7 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
 - Images and documents are passed through, including documents in earlier turns, which are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit. Images in earlier turns become a text placeholder. Other attachment types are rejected with an error in the latest user message and dropped with a warning in earlier turns.
-- Extensions that edit the raw API request cannot be detected, so no warning is logged. Pi 0.52 has no request-edit hook; its only raw-request surface, the `onPayload` and `headers` stream options, is not set by Pi itself. Such edits have no effect, because the request is built by the Claude CLI.
+- Extensions that edit the raw API request are not supported by this CLI-backed provider. Pi 1.x exposes provider instrumentation hooks, but the current implementation does not honor them or warn about unsupported request mutation. The migration must document supported observation hooks and warn where request-editing hooks cannot be honored. Native-provider parity is not promised.
 - Native Windows is not supported. On Windows, use WSL.
 
 ## Spike findings
