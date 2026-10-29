@@ -113,7 +113,13 @@ describe("request isolation", () => {
     claude = installFakeClaude(upstream.url);
     const env = { ...process.env, HOME: plantMarkers() };
     const userMessage = { message: { role: "user", content: "Hi" } };
-    const child = spawn("claude", [], { env });
+    // Run the fixture directly: native spawn cannot execute a Windows .cmd.
+    // Deliberately omit all provider isolation flags in this control case.
+    const child = spawn(
+      process.execPath,
+      [join(__dirname, "harness", "fake-claude.cjs")],
+      { env },
+    );
     child.stdin.end(JSON.stringify(userMessage) + "\n");
     await new Promise((resolve) => child.on("close", resolve));
 

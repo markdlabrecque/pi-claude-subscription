@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.19.0"
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.19.0"
       - run: npm ci
       - run: npm run typecheck
 
@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.19.0"
       - run: npm ci
+      - run: npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent --depth=0
       - run: npm run test:coverage

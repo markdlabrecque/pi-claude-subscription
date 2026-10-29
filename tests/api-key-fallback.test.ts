@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const streamSimpleAnthropic = vi.fn(() => "anthropic-stream");
+afterEach(() => vi.unstubAllEnvs());
 
 vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
   anthropicProvider: () => ({

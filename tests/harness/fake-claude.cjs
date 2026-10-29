@@ -29,7 +29,8 @@ const model = flag("--model") ?? "unknown";
 // Host config the real CLI would load, switched off by the same flags/env.
 const BUILT_IN_TOOLS = ["Bash", "Read", "Edit", "Write", "Grep", "Glob"];
 const DEFAULT_PROMPT = "You are Claude Code, Anthropic's official CLI.";
-const claudeDir = path.join(os.homedir(), ".claude");
+const home = process.env.HOME ?? os.homedir();
+const claudeDir = path.join(home, ".claude");
 const readIf = (file) =>
   fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : "";
 const settingsOn = flag("--setting-sources") !== "";
@@ -106,7 +107,7 @@ function mcpToolNames() {
 // --resume needs a readable one. Otherwise it exits 1 with this message and
 // sends no request (same for a missing and an unreadable file).
 const sessionFile = (id) =>
-  path.join(os.homedir(), ".claude", "sessions", `${id}.jsonl`);
+  path.join(home, ".claude", "sessions", `${id}.jsonl`);
 if (flag("--session-id")) {
   const file = sessionFile(flag("--session-id"));
   fs.mkdirSync(path.dirname(file), { recursive: true });

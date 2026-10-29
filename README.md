@@ -12,24 +12,29 @@ The extension registers a custom pi provider, `pi-claude-subscription`. Each req
 
 This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` packages are no longer supported. We will not maintain a dual-version adapter or a 0.52 compatibility test suite. See [ADR-0001](docs/adr/0001-pi-1x-only-support.md) for the decision.
 
-The source and test dependencies now use Pi AI and coding-agent 1.4.0. A registered-provider text smoke test runs against the locally installed SDK with a fake CLI and upstream. Startup model selection, thinking capabilities and normalized tool-turn CI verification are still in progress. This is not a claim of complete Pi 1.x compatibility. Instruction forwarding and current-request tool inventory remain separate follow-ups.
+The minimum supported Pi version is **1.4.0**. The exact tested SDK pair is `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`, pinned in development dependencies and the lockfile. Mandatory local-SDK tests cover startup model selection, registered text/tool requests, thinking mappings, API-key fallback, isolation and the one-request guard. CI runs the same suite on Node 22.19.0 across Linux, macOS and Windows. Local verification ran on Linux with Node 22.19.0 and 24.20.0; remote CI results are not implied. See [migration verification](docs/pi-1x-verification.md).
+
+Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. Known follow-ups are listed below.
 
 ## Requirements
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude auth login`; `claude` on PATH)
 - A Claude Pro or Max subscription
-- [Pi 1.x](https://github.com/earendil-works/pi), subject to the migration status above. Compatibility with GSD or other Pi-derived hosts is not implied.
+- [Pi 1.4.0 or later in the 1.x family](https://github.com/earendil-works/pi). Only SDK 1.4.0 is verified here; later versions require their own checks. Compatibility with GSD or other Pi-derived hosts is not implied.
+- Node.js 22.19.0 or later.
 - macOS or Linux. On Windows, use WSL.
 
 ## Setup
 
-After the Pi 1.x migration is verified, add to `~/.pi/agent/settings.json`:
+Install the supported host first, then install this checkout for the migrated code:
 
-```json
-{
-  "packages": ["npm:pi-claude-subscription"]
-}
+```bash
+npm install -g @earendil-works/pi-coding-agent@1.4.0
+npm ci
+pi install .
 ```
+
+Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings. The published `pi-claude-subscription@0.3.1` predates this migration; do not use it to verify the new SDK contract. No global Pi installation, real CLI or login is needed to run the tests.
 
 Then select a model via `/model` in the interactive UI. Haiku, Sonnet, Opus and Fable are listed under the `pi-claude-subscription` provider.
 
@@ -49,7 +54,11 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
 - Images and documents are passed through, including documents in earlier turns, which are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit. Images in earlier turns become a text placeholder. Other attachment types are rejected with an error in the latest user message and dropped with a warning in earlier turns.
-- Extensions that edit the raw API request are not supported by this CLI-backed provider. Pi 1.x exposes provider instrumentation hooks, but the current implementation does not honor them or warn about unsupported request mutation. The migration must document supported observation hooks and warn where request-editing hooks cannot be honored. Native-provider parity is not promised.
+- Effective normalized system-instruction forwarding remains [#40](https://github.com/markdlabrecque/pi-claude-subscription/issues/40). Workspace guidance remains [#43](https://github.com/markdlabrecque/pi-claude-subscription/issues/43).
+- Current-request tool inventory and activation remain [#42](https://github.com/markdlabrecque/pi-claude-subscription/issues/42). The migration tests use a stable offered tool set, not changing or deferred inventories.
+- Truthful terminal failure/cancellation statuses remain [#41](https://github.com/markdlabrecque/pi-claude-subscription/issues/41). Existing cleanup tests do not certify all terminal statuses.
+- Broader extension compatibility remains [#14](https://github.com/markdlabrecque/pi-claude-subscription/issues/14), including provider-scoped environment [#50](https://github.com/markdlabrecque/pi-claude-subscription/issues/50), request edits/observation hooks [#51](https://github.com/markdlabrecque/pi-claude-subscription/issues/51), and third-party tools/attachments [#52](https://github.com/markdlabrecque/pi-claude-subscription/issues/52). The CLI path does not yet honor those instrumentation hooks. Native-provider parity is not promised.
+- Cache-write pricing remains [#34](https://github.com/markdlabrecque/pi-claude-subscription/issues/34), and account-side billing verification remains [#35](https://github.com/markdlabrecque/pi-claude-subscription/issues/35). Cache optimization is deferred until [#39](https://github.com/markdlabrecque/pi-claude-subscription/issues/39), #40 and #42 are complete.
 - Native Windows is not supported. On Windows, use WSL.
 
 ## Spike findings

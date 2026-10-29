@@ -1,11 +1,10 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { streamViaCli } from "../src/provider";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   startFakeUpstream,
   installFakeClaude,
   type FakeUpstream,
   type FakeClaude,
-  model,
 } from "./harness";
 
 import * as piAi from "@earendil-works/pi-ai";
@@ -24,8 +23,25 @@ const tools = ["read", "mcp__t3-code__link_pull_request"].map((name) => ({
   parameters: piAi.Type.Object({ path: piAi.Type.String() }),
 }));
 
-async function run(context: any) {
-  const stream = streamViaCli(model, context);
+async function run(context: piAi.TranscriptContext) {
+  // Each case loads a stable inventory. Changing inventories remain a separate ticket.
+  vi.resetModules();
+  const registerProvider = vi.fn();
+  const { default: extension } = await import("../index");
+  extension({
+    registerProvider,
+    on: vi.fn(),
+    getAllTools: () => piAi.getCurrentTools(context.messages),
+  } as unknown as ExtensionAPI);
+  expect(registerProvider).toHaveBeenCalledOnce();
+  const [provider, config] = registerProvider.mock.calls[0];
+  const model = {
+    ...config.models[0],
+    provider,
+    api: config.api,
+    baseUrl: config.baseUrl,
+  };
+  const stream = config.streamSimple(model, context);
   for await (const _ of stream);
   return (await stream.result()) as any;
 }

@@ -49,6 +49,7 @@ it("selects the registered subscription provider at SDK startup and completes a 
     if (key !== "PATH") vi.stubEnv(key, undefined);
   }
   vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
   vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
   vi.stubEnv("XDG_CACHE_HOME", join(home, ".cache"));
   vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
