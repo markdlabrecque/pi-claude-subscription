@@ -60,6 +60,29 @@ function mapStopReason(
 }
 
 /**
+ * An empty assistant message for the model: no content, zero usage.
+ */
+export function createAssistantOutput(model: Model<any>): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content: [] as (TextContent | ThinkingContent | ToolCall)[],
+    api: "pi-claude-subscription",
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
+}
+
+/**
  * Create an event bridge that translates Claude API streaming events
  * into pi's AssistantMessageEventStream events.
  *
@@ -78,23 +101,7 @@ export function createEventBridge(
   const blocks: TrackedBlock[] = [];
 
   // The accumulated output message
-  const output: AssistantMessage = {
-    role: "assistant" as const,
-    content: [] as (TextContent | ThinkingContent | ToolCall)[],
-    api: "pi-claude-subscription",
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp: Date.now(),
-  };
+  const output = createAssistantOutput(model);
 
   let started = false;
 

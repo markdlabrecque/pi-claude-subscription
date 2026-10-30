@@ -13,7 +13,8 @@
  * 7. Implements break-early: kills subprocess at message_stop when any
  *    tool_use block was seen, so pi runs the tools
  * 8. Hardened lifecycle: inactivity and per-request timeouts, subprocess exit
- *    handler, streamEnded guard, abort via SIGKILL, process registry
+ *    handler, one typed terminal result per request, abort via SIGKILL,
+ *    process registry
  * 9. Falls back from resume to replay when the session is gone
  */
 
@@ -21,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   createAssistantMessageEventStream,
+  type AssistantMessage,
   type AssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
@@ -44,7 +46,7 @@ import {
   getRequestTimeoutMs,
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
-import { createEventBridge } from "./event-bridge.js";
+import { createAssistantOutput, createEventBridge } from "./event-bridge.js";
 import {
   startRelay,
   describeFailure,
@@ -85,7 +87,7 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
  * Claude CLI can auto-execute the tools.
  *
  * Hardened with: inactivity timeout (180s), subprocess exit handler with stderr
- * surfacing, streamEnded guard against double errors, abort via SIGKILL, and
+ * surfacing, a request-wide guard against a second terminal result, abort via SIGKILL, and
  * process registry integration for teardown cleanup.
  *
  * @param model - The model to use (from pi's model catalog)
@@ -108,6 +110,37 @@ export function streamViaCli(
   // request-local view; process.env is never written
   const env = resolveEnv(options?.env);
 
+  // One terminal result per request, across both attempts: the first wins
+  let ended = false;
+
+  /**
+   * End the request as a typed error. The message keeps any partial content
+   * and measured usage; errorMessage carries the diagnostic.
+   */
+  const endWithError = (output: AssistantMessage, errorMessage: string) => {
+    if (ended) return;
+    ended = true;
+    stream.push({
+      type: "error",
+      reason: "error",
+      error: { ...output, stopReason: "error", errorMessage },
+    });
+    stream.end();
+  };
+
+  /** End the request successfully with the accumulated message. */
+  const endWithDone = (output: AssistantMessage) => {
+    if (ended) return;
+    ended = true;
+    stream.push({
+      type: "done",
+      // The bridge only ever sets these three
+      reason: output.stopReason as "stop" | "length" | "toolUse",
+      message: output,
+    });
+    stream.end();
+  };
+
   /**
    * One CLI attempt. Resolves true when a resumed session was missing or
    * corrupt and nothing was sent, so the caller can retry as replay.
@@ -125,6 +158,8 @@ export function streamViaCli(
     let resultSeen = false;
     // What happened to this request, for the debug diagnostics record
     let diagnostics: ReturnType<typeof startRequestDiagnostics> | undefined;
+    // The bridge's accumulated message, so a thrown failure still keeps it
+    let output: AssistantMessage | undefined;
     const seen = {
       messageStart: false,
       messageStop: false,
@@ -137,37 +172,26 @@ export function streamViaCli(
     };
 
     try {
-      // End the stream before anything is spawned
-      const endWithoutCli = (text?: string) => {
-        const output = createEventBridge(stream, model).getOutput();
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: {
-            ...output,
-            ...(text && { content: [{ type: "text", text }] }),
-          },
-        });
-        stream.end();
-      };
+      const bridge = createEventBridge(stream, model, getPiToolNames(context));
+      output = bridge.getOutput();
 
       // Pi already cancelled: nothing to start
       if (options?.signal?.aborted) {
-        endWithoutCli();
+        endWithDone(output);
         return false;
       }
 
       // Reject attachments the CLI path cannot carry, before spawning anything
       const unsupported = findUnsupportedAttachment(context.messages);
       if (unsupported) {
-        endWithoutCli(`Error: ${unsupported}`);
+        endWithError(output, unsupported);
         return false;
       }
 
       // Stop a model stuck re-issuing the same failing tool call
       const repeated = findRepeatedToolFailure(context.messages);
       if (repeated) {
-        endWithoutCli(`Error: ${repeated}`);
+        endWithError(output, repeated);
         return false;
       }
 
@@ -208,7 +232,7 @@ export function streamViaCli(
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
         seen.cancelled = true;
-        endWithoutCli();
+        endWithDone(output);
         return false;
       }
 
@@ -232,56 +256,19 @@ export function streamViaCli(
       // Write user message to subprocess stdin
       writeUserMessage(proc, prompt);
 
-      // Create event bridge (before endStreamWithError so bridge is in scope)
-      const bridge = createEventBridge(stream, model, getPiToolNames(context));
-
-      // Guard against double stream.end() and double error events.
-      // First error path wins; subsequent ones are no-ops.
-      let streamEnded = false;
-
       /**
-       * End the stream with an error, using a "done" event instead of "error".
-       *
-       * Why "done" not "error": AssistantMessageEventStream.extractResult()
-       * returns event.error (a string) for error events, but agent-loop.js
-       * then calls message.content.filter() on the result, crashing because
-       * a string has no .content property. By pushing "done" with a valid
-       * AssistantMessage (content:[]), pi gets a well-formed object.
+       * End the request as a typed error, after any partial content. Upstream
+       * and login failures use their mapped diagnostic, so Pi can retry the
+       * retryable ones and stop on the others.
        */
       function endStreamWithError(errMsg: string) {
-        if (streamEnded || broken) return;
-        streamEnded = true;
-        const output = bridge.getOutput();
+        if (broken) return;
         const failure: UpstreamFailure | undefined =
           relay?.failure ?? (notLoggedIn ? { status: 401 } : undefined);
-        if (failure) {
-          // Upstream and login failures end as a real error, so Pi can retry
-          // the retryable ones and stop on the others.
-          stream.push({
-            type: "error",
-            reason: "error",
-            error: {
-              ...output,
-              stopReason: "error",
-              errorMessage: describeFailure(failure),
-            },
-          } as any);
-          stream.end();
-          return;
-        }
-        const errorMessage = {
-          ...output,
-          content: output.content?.length
-            ? output.content
-            : [{ type: "text" as const, text: `Error: ${errMsg}` }],
-          stopReason: "stop" as const,
-        };
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: errorMessage,
-        } as any);
-        stream.end();
+        endWithError(
+          bridge.getOutput(),
+          failure ? describeFailure(failure) : errMsg,
+        );
       }
 
       // Inactivity timeout: kill subprocess if no stdout for INACTIVITY_TIMEOUT_MS
@@ -447,8 +434,9 @@ export function streamViaCli(
         rl.on("close", resolve);
       });
 
-      // stdout can close before the exit code and stderr are in
-      if (!streamEnded && !resultSeen && !bridge.getOutput().content?.length) {
+      // stdout can close before the exit code and stderr are in, with or
+      // without partial output
+      if (!ended && !resultSeen && !broken) {
         await new Promise<void>((resolve) =>
           proc!.exitCode !== null || proc!.signalCode != null
             ? resolve()
@@ -462,61 +450,35 @@ export function streamViaCli(
 
       // Push done event after readline closes (async). Pushing synchronously
       // inside handleMessageStop prevents pi from executing tools.
-      // Guard with streamEnded to avoid pushing done after an error was already pushed.
-      if (
-        !streamEnded &&
-        relay.failure &&
-        !bridge.getOutput().content?.length
-      ) {
-        endStreamWithError("");
-      }
-      if (!streamEnded) {
-        const output = bridge.getOutput();
+      // The terminal guard drops these once an error was already reported.
+      // A known upstream failure is reported even after partial content.
+      if (relay.failure) endStreamWithError("");
 
-        // A thinking-only reply (no text, no tool call) leaves Pi with nothing
-        // to act on; the empty-signature thinking block can't be replayed
-        // either. End it as a real error so Pi can retry or report it.
-        const blocks = output.content ?? [];
-        const onlyEmptyThinking =
-          blocks.length > 0 &&
-          blocks.every(
-            (b: any) =>
-              b.type === "thinking" && !b.thinking && !b.thinkingSignature,
-          );
-        if (onlyEmptyThinking) {
-          streamEnded = true;
-          stream.push({
-            type: "error",
-            reason: "error",
-            error: {
-              ...output,
-              content: [],
-              stopReason: "error",
-              errorMessage:
-                "Claude returned an empty reply (thinking only, no text or tool call).",
-            },
-          } as any);
-          stream.end();
-          return false;
-        }
-
-        streamEnded = true;
-        stream.push({
-          type: "done",
-          // The bridge only ever sets these three
-          reason: output.stopReason as "stop" | "length" | "toolUse",
-          message: output,
-        });
-        stream.end();
+      // A thinking-only reply (no text, no tool call) leaves Pi with nothing
+      // to act on; the empty-signature thinking block can't be replayed
+      // either. End it as a real error so Pi can retry or report it.
+      const blocks = output.content ?? [];
+      const onlyEmptyThinking =
+        blocks.length > 0 &&
+        blocks.every(
+          (b: any) =>
+            b.type === "thinking" && !b.thinking && !b.thinkingSignature,
+        );
+      if (onlyEmptyThinking) {
+        endWithError(
+          { ...output, content: [] },
+          "Claude returned an empty reply (thinking only, no text or tool call).",
+        );
+        return false;
       }
+
+      endWithDone(output);
     } catch (err: any) {
       seen.threw = true;
-      stream.push({
-        type: "error",
-        reason: "error",
-        error: err.message ?? "Unexpected error in streamViaCli",
-      } as any);
-      stream.end();
+      endWithError(
+        output ?? createAssistantOutput(model),
+        err?.message || "Unexpected error in streamViaCli",
+      );
     } finally {
       stopRequestTimer?.();
       // Clean up abort listener

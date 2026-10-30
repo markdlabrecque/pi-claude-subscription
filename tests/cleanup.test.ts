@@ -102,7 +102,8 @@ describe("stopping a request leaves nothing behind", () => {
 
     const message = await runTurn("hang");
 
-    expect(message.content[0].text).toContain("timed out");
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toContain("timed out");
     await expectNothingLeft();
   });
 
