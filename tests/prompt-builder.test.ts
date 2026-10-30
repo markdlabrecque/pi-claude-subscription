@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildPrompt, buildResumePrompt } from "../src/prompt-builder";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  buildPrompt,
+  buildResumePrompt,
+  buildSystemPrompt,
+} from "../src/prompt-builder";
 
 describe("buildPrompt", () => {
   it("keeps a document from an earlier turn as its own block", () => {
@@ -730,185 +734,51 @@ describe("custom tool history replay", () => {
 });
 
 describe("buildSystemPrompt", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("returns context systemPrompt when no AGENTS.md found", async () => {
-    // Mock fs to not find any AGENTS.md
-    vi.doMock("node:fs", () => ({
-      existsSync: () => false,
-      readFileSync: () => "",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
+  it("returns context systemPrompt", () => {
     const context = {
       systemPrompt: "You are a helpful assistant.",
       messages: [],
     } as unknown as any;
-    const result = bsp(context, "/some/project/path");
-    expect(result).toContain("You are a helpful assistant.");
+    expect(buildSystemPrompt(context)).toBe("You are a helpful assistant.");
   });
 
-  it("appends AGENTS.md content when found", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => path.endsWith("AGENTS.md"),
-      readFileSync: () => "# Agent Instructions\nDo things carefully.",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
+  it("returns Pi's transcript system messages with sections applied in order", () => {
     const context = {
-      systemPrompt: "Base prompt.",
-      messages: [],
-    } as unknown as any;
-    const result = bsp(context, "/some/project");
-    expect(result).toContain("Base prompt.");
-    expect(result).toContain("Agent Instructions");
-    expect(result).toContain("Do things carefully.");
-  });
-
-  it("sanitizes .pi references to .claude in AGENTS.md content", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => path.endsWith("AGENTS.md"),
-      readFileSync: () => "Check ~/.pi/config and .pi/settings for details.",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
-    const context = { systemPrompt: "Base.", messages: [] } as unknown as any;
-    const result = bsp(context, "/some/project");
-    expect(result).toContain("~/.claude");
-    expect(result).toContain(".claude/settings");
-    expect(result).not.toContain(".pi/");
-  });
-
-  it("returns empty string when no systemPrompt and no AGENTS.md", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: () => false,
-      readFileSync: () => "",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
-    const context = { messages: [] } as unknown as any;
-    const result = bsp(context, "/some/project");
-    expect(result).toBe("");
-  });
-
-  it("walks up directories to find AGENTS.md in parent", async () => {
-    // Only the parent directory's AGENTS.md exists, not the cwd
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => {
-        // Only parent path has AGENTS.md
-        if (path.includes("parent") && path.endsWith("AGENTS.md")) return true;
-        return false;
-      },
-      readFileSync: () => "# Parent AGENTS.md\nInstructions from parent.",
-    }));
-    vi.doMock("node:path", async () => {
-      const actual =
-        await vi.importActual<typeof import("node:path")>("node:path");
-      return {
-        ...actual,
-        resolve: (p: string) => p,
-        join: (...args: string[]) => args.join("/"),
-        dirname: (p: string) => {
-          // Simulate walking up: /a/b/parent/child -> /a/b/parent -> /a/b -> etc.
-          const parts = p.split("/").filter(Boolean);
-          if (parts.length <= 1) return p; // root
-          return "/" + parts.slice(0, -1).join("/");
+      messages: [
+        {
+          role: "system",
+          content: "Base.",
+          sections: { rules: "Old rules.", skills: "Skills." },
+          timestamp: 0,
         },
-      };
-    });
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
-    const context = {
-      systemPrompt: "Base.",
-      messages: [],
+        { role: "user", content: "Hi", timestamp: 1 },
+        {
+          role: "system",
+          content: "Later.",
+          sections: { rules: "New rules.", skills: null },
+          timestamp: 2,
+        },
+      ],
     } as unknown as any;
-    const result = bsp(context, "/a/b/parent/child");
-    expect(result).toContain("Parent AGENTS.md");
-    expect(result).toContain("Instructions from parent.");
+    expect(buildSystemPrompt(context)).toBe("Base.\n\nLater.\n\nNew rules.");
   });
 
-  it("sanitizes empty AGENTS.md content gracefully", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => path.endsWith("AGENTS.md"),
-      readFileSync: () => "",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
+  it("keeps .pi paths exactly as Pi wrote them", () => {
     const context = {
-      systemPrompt: "Base prompt.",
+      systemPrompt: "Config at ~/.pi/settings.json and .pi/rules/*.md files.",
       messages: [],
     } as unknown as any;
-    const result = bsp(context, "/some/project");
-    // Empty AGENTS.md content should just produce the base prompt
-    expect(result).toContain("Base prompt.");
+    expect(buildSystemPrompt(context)).toBe(
+      "Config at ~/.pi/settings.json and .pi/rules/*.md files.",
+    );
   });
 
-  it("sanitizes AGENTS.md with only whitespace content", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => path.endsWith("AGENTS.md"),
-      readFileSync: () => "   \n\n  \t  \n",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
-    const context = {
-      systemPrompt: "Base.",
-      messages: [],
-    } as unknown as any;
-    const result = bsp(context, "/some/project");
-    expect(result).toContain("Base.");
+  it("returns empty string when Pi gives no instructions", () => {
+    const context = { messages: [] } as unknown as any;
+    expect(buildSystemPrompt(context)).toBe("");
   });
 
-  it("sanitizes AGENTS.md with special regex characters", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => path.endsWith("AGENTS.md"),
-      readFileSync: () =>
-        "Config at ~/.pi/settings.json and .pi/rules/*.md files.",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
-    const context = {
-      systemPrompt: "",
-      messages: [],
-    } as unknown as any;
-    const result = bsp(context, "/some/project");
-    expect(result).toContain("~/.claude/settings.json");
-    expect(result).toContain(".claude/rules/*.md");
-    expect(result).not.toContain(".pi/");
-  });
-
-  it("handles readFileSync error gracefully (skip silently)", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: (path: string) => path.endsWith("AGENTS.md"),
-      readFileSync: () => {
-        throw new Error("EACCES: permission denied");
-      },
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
-    const context = {
-      systemPrompt: "Base prompt.",
-      messages: [],
-    } as unknown as any;
-    const result = bsp(context, "/some/project");
-    // Should still return the base prompt despite read error
-    expect(result).toContain("Base prompt.");
-    // Should not include any AGENTS.md content
-    expect(result).not.toContain("EACCES");
-  });
-
-  it("appends tool result instruction when messages contain toolResult", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: () => false,
-      readFileSync: () => "",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
+  it("appends tool result instruction when messages contain toolResult", () => {
     const context = {
       systemPrompt: "Base prompt.",
       messages: [
@@ -920,18 +790,12 @@ describe("buildSystemPrompt", () => {
         },
       ],
     } as unknown as any;
-    const result = bsp(context, "/some/project");
+    const result = buildSystemPrompt(context);
     expect(result).toContain("IMPORTANT:");
     expect(result).toContain("tool results");
   });
 
-  it("replay instruction covers a history that ends on a tool result", async () => {
-    vi.doMock("node:fs", () => ({
-      existsSync: () => false,
-      readFileSync: () => "",
-    }));
-
-    const { buildSystemPrompt: bsp } = await import("../src/prompt-builder");
+  it("replay instruction covers a history that ends on a tool result", () => {
     const context = {
       messages: [
         { role: "user", content: "read the file" },
@@ -944,7 +808,7 @@ describe("buildSystemPrompt", () => {
         { role: "toolResult", content: "file contents here", toolName: "read" },
       ],
     } as unknown as any;
-    const result = bsp(context, "/some/project", true);
+    const result = buildSystemPrompt(context, true);
     expect(result).toContain("last turn is a tool result");
     expect(result).not.toContain(
       "Reply as the assistant to the last user turn.",

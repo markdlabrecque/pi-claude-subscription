@@ -90,11 +90,16 @@ vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
   }),
 }));
 
-vi.mock("@earendil-works/pi-ai", () => ({
-  createAssistantMessageEventStream: () =>
-    new MockAssistantMessageEventStream(),
-  calculateCost: vi.fn(),
-}));
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
+  return {
+    createAssistantMessageEventStream: () =>
+      new MockAssistantMessageEventStream(),
+    calculateCost: vi.fn(),
+    getCurrentSystemPrompt: actual.getCurrentSystemPrompt,
+    normalizeContext: actual.normalizeContext,
+  };
+});
 
 import spawn from "cross-spawn";
 import { mkdtempSync, rmSync } from "node:fs";

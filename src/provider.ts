@@ -133,8 +133,6 @@ export function streamViaCli(
     };
 
     try {
-      const cwd = options?.cwd ?? process.cwd();
-
       // End the stream before anything is spawned
       const endWithoutCli = (text?: string) => {
         const output = createEventBridge(stream, model).getOutput();
@@ -189,7 +187,7 @@ export function streamViaCli(
         : resumeSessionId
           ? buildResumePrompt(context)
           : buildPrompt(context);
-      const systemPrompt = buildSystemPrompt(context, cwd, replay);
+      const systemPrompt = buildSystemPrompt(context, replay);
 
       // Compute effort level from reasoning options
       const effort = mapThinkingEffort(
