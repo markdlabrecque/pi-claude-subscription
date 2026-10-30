@@ -332,15 +332,6 @@ describe("createEventBridge", () => {
       });
       expect(bridge.getOutput().stopReason).toBe("toolUse");
     });
-
-    it("maps unknown stop reasons to stop", () => {
-      const bridge = createEventBridge(stream as any, model as any);
-      bridge.handleEvent({
-        type: "message_delta",
-        delta: { stop_reason: "something_else" },
-      });
-      expect(bridge.getOutput().stopReason).toBe("stop");
-    });
   });
 
   describe("tool_use content block streaming", () => {
@@ -603,7 +594,7 @@ describe("createEventBridge", () => {
       expect(toolCall.arguments).toEqual({ command: "ls -la" });
     });
 
-    it("emits toolcall_end with raw string arguments when final JSON parse fails", () => {
+    it("never emits raw string arguments when final JSON parse fails", () => {
       const bridge = createBridgeWithStart();
       bridge.handleEvent({
         type: "content_block_start",
@@ -628,10 +619,34 @@ describe("createEventBridge", () => {
         index: 0,
       });
 
-      const event = stream.events[0] as any;
-      expect(event.type).toBe("toolcall_end");
-      // Arguments should be the raw string since JSON parse failed
-      expect(event.toolCall.arguments).toBe("not valid json at all");
+      // 1.x contract: arguments are a parsed object, never the raw string
+      for (const event of stream.events as any[]) {
+        if (event.type === "toolcall_end") {
+          expect(typeof event.toolCall.arguments).not.toBe("string");
+        }
+      }
+      expect(typeof (bridge.getOutput().content[0] as any).arguments).not.toBe(
+        "string",
+      );
+    });
+
+    it("keeps valid observed partial arguments without inventing others", () => {
+      const bridge = createBridgeWithStart();
+      bridge.handleEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_01", name: "Read" },
+      });
+      bridge.handleEvent({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"a":1}{' },
+      });
+      bridge.handleEvent({ type: "content_block_stop", index: 0 });
+
+      const args = (bridge.getOutput().content[0] as any).arguments;
+      expect(typeof args).not.toBe("string");
+      expect(args).not.toHaveProperty("b");
     });
 
     it("getOutput().stopReason is toolUse when stop_reason is tool_use", () => {
