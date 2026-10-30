@@ -73,12 +73,13 @@ async function startProvider() {
     api: config.api!,
     baseUrl: config.baseUrl!,
   } as Model<Api>;
-  return async (messages: unknown[], cwd: string): Promise<Body> => {
+  // Pi 1.x stream options carry no cwd; the workspace travels in the transcript.
+  return async (messages: unknown[]): Promise<Body> => {
     const before = upstream!.requests.length;
     const stream = config.streamSimple!(
       model,
       { messages } as never,
-      { cwd } as never,
+      {} as never,
     );
     for await (const _ of stream);
     expect(upstream!.requests).toHaveLength(before + 1);
@@ -96,15 +97,10 @@ const withCwdSection = (cwd: string) => [
   { role: "user", content: "Where am I?", timestamp: 1 },
 ];
 
-const withoutCwdSection = [
-  { role: "system", content: "BASE-PROMPT-4301", timestamp: 0 },
-  { role: "user", content: "Where am I?", timestamp: 1 },
-];
-
 it("tells Claude the Pi workspace while the CLI stays in its private temp directory", async () => {
   const send = await startProvider();
   const project = join(sandbox, "project-alpha");
-  const body = await send(withCwdSection(project), project);
+  const body = await send(withCwdSection(project));
 
   expect(body.system).toContain(project);
   // The CLI ran in its own temp dir, not in the project or the host cwd
@@ -117,12 +113,12 @@ it("tells Claude the Pi workspace while the CLI stays in its private temp direct
   expect(body.fake_args).toContain("--tools");
 });
 
-it("forwards the Pi workspace from the stream options when the transcript has no cwd section", async () => {
+it("forwards the session workspace for SDK embedding, where the host cwd differs", async () => {
   const send = await startProvider();
   const project = join(sandbox, "sdk-project");
-  // SDK embedding: host process cwd differs from the Pi session cwd
+  // Pi 1.x carries the session cwd only in the system message's cwd section
   expect(process.cwd()).not.toBe(project);
-  const body = await send(withoutCwdSection, project);
+  const body = await send(withCwdSection(project));
 
   expect(body.system).toContain(project);
   expect(body.system).not.toContain(process.cwd());
@@ -130,25 +126,17 @@ it("forwards the Pi workspace from the stream options when the transcript has no
   expect(body.fake_cwd).not.toBe(project);
 });
 
-it.each([
-  ["a cwd section in the transcript", true],
-  ["stream options only", false],
-])(
-  "drops the old workspace once Pi's workspace changes (%s)",
-  async (_, section) => {
-    const send = await startProvider();
-    const first = join(sandbox, "project-first");
-    const second = join(sandbox, "project-second");
-    const messages = (cwd: string) =>
-      section ? withCwdSection(cwd) : withoutCwdSection;
+it("drops the old workspace once Pi's workspace changes", async () => {
+  const send = await startProvider();
+  const first = join(sandbox, "project-first");
+  const second = join(sandbox, "project-second");
 
-    const one = await send(messages(first), first);
-    expect(one.system).toContain(first);
+  const one = await send(withCwdSection(first));
+  expect(one.system).toContain(first);
 
-    const two = await send(messages(second), second);
-    expect(two.system).toContain(second);
-    expect(two.system).not.toContain(first);
-    expect(two.fake_cwd).not.toBe(second);
-    expect(two.system).not.toContain(two.fake_cwd);
-  },
-);
+  const two = await send(withCwdSection(second));
+  expect(two.system).toContain(second);
+  expect(two.system).not.toContain(first);
+  expect(two.fake_cwd).not.toBe(second);
+  expect(two.system).not.toContain(two.fake_cwd);
+});
