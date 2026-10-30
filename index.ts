@@ -27,6 +27,7 @@ import {
   isApiKeyFallbackEnabled,
   streamViaAnthropic,
 } from "./src/api-key-fallback.js";
+import { resolveEnv } from "./src/env-flag.js";
 import { toMcpToolDefs, writeMcpConfig } from "./src/mcp-config.js";
 
 // Kill all active Claude subprocesses on process exit to prevent orphans
@@ -94,7 +95,8 @@ export default function (pi: ExtensionAPI) {
       api: "pi-claude-subscription",
       models,
       streamSimple: (model, context, options) => {
-        if (isApiKeyFallbackEnabled()) {
+        // Only the explicit flag switches paths; a scoped key alone does not
+        if (isApiKeyFallbackEnabled(resolveEnv(options?.env))) {
           return streamViaAnthropic(model, context, options);
         }
         let configPath: string | undefined;

@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
-import { envFlag } from "./env-flag.js";
+import { envFlag, resolveEnv } from "./env-flag.js";
 
 export const API_KEY_FALLBACK_ENV = "PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK";
 
@@ -44,6 +44,6 @@ export function streamViaAnthropic(
 
   return streamSimple(anthropicModel, context, {
     ...options,
-    apiKey: process.env.ANTHROPIC_API_KEY,
+    apiKey: resolveEnv(options?.env).ANTHROPIC_API_KEY,
   });
 }
