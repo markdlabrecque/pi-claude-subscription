@@ -46,10 +46,13 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 - `tests/extension-compat.test.ts` checks the provenance record and runs the fixture's `manage_todo_list` read through `createAgentSession`, Pi's tool loop and the registered provider. It also runs a small #50 scoped-environment and #51 `onPayload` check.
 - `tests/attachments.test.ts` covers pass-through and typed rejection in replay, resume and resume-to-replay fallback. `tests/attachments-resume.test.ts` covers resume's tool-result path: the request carries the new tool result and does not resend an earlier image the resumed session already holds.
 - Commands: `npm ci`, then the commands under [Reproduce](#reproduce). The new tests run in the existing `npm test` and `npm run test:coverage` jobs; CI configuration is unchanged.
-- Local results for this change, Linux:
-  - `npm test`: 37 test files, 432 tests passed. This includes the focused `tests/extension-compat.test.ts`, `tests/attachments.test.ts`, `tests/attachments-resume.test.ts` and `tests/prompt-builder.test.ts`.
-  - `npm run typecheck` (`tsc --noEmit`, full project including `tests/fixtures/pi-manage-todo-list/`): clean, run by the commit hook.
-  - `npm run test:coverage`, `npm run lint` and `npm run format:check`: not run for this change; the implementing session was not permitted to run them. They remain to be run and recorded.
+- Local results for this change, Linux, run by a person on HEAD `6fc4aaf` on 2026-10-30:
+  - `npm test`: passed twice, 37 test files, 432/432 tests. This includes the focused `tests/extension-compat.test.ts`, `tests/attachments.test.ts`, `tests/attachments-resume.test.ts` and `tests/prompt-builder.test.ts`.
+  - `npm run typecheck` (`tsc --noEmit`, full project including `tests/fixtures/pi-manage-todo-list/`): passed, exit 0.
+  - `npm run lint`: passed, exit 0.
+  - `npm run format:check`: passed, exit 0; all matched files use Prettier code style.
+  - `npm run test:coverage`: run 3 times. Runs 2 and 3 passed 432/432 tests with coverage for all files at 98.18% statements, 91.5% branches, 99.16% functions and 98.18% lines, above the existing thresholds.
+  - Intermittent failure: coverage run 1 failed 3 of 432 tests in `tests/sdk-startup.test.ts`, `tests/pi-instructions.test.ts` and `tests/provider-hooks.test.ts`. In each, the fake upstream saw 2 requests instead of 1, or an extra `GET /`. It did not recur in the later runs and is not fixed by this change; it remains open.
   - Remote CI: not run.
 
 ## Boundaries
