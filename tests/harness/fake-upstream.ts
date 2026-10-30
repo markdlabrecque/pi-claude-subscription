@@ -15,6 +15,9 @@ export type Scenario =
   | "429"
   | "503"
   | "529"
+  | "500"
+  | "cut_off"
+  | "max_tokens"
   | "hang";
 
 export interface RecordedRequest {
@@ -160,6 +163,25 @@ export async function startFakeUpstream(
         case "529":
           ({ status, body } = error("overloaded_error", 529));
           break;
+        case "500":
+          ({ status, body } = error("api_error", 500));
+          break;
+        case "max_tokens":
+          body = message(
+            [{ type: "text", text: "A reply cut short by the output limit" }],
+            "max_tokens",
+          );
+          break;
+        case "cut_off": {
+          // A 200 whose body ends mid-message, before message_stop.
+          const full = JSON.stringify(
+            message([{ type: "text", text: NORMAL_TEXT }], "end_turn"),
+          );
+          res.writeHead(200, { ...headers, "content-length": full.length });
+          res.write(full.slice(0, 40));
+          setTimeout(() => res.socket?.destroy(), 20);
+          return;
+        }
       }
       res.writeHead(status, headers);
       res.end(JSON.stringify(body));

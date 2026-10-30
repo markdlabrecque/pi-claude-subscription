@@ -217,7 +217,19 @@ async function run(userMessage) {
   let res = await fetch(url, request);
   // Like the real CLI, retry a server error once; the relay rejects the retry.
   if (res.status >= 500) res = await fetch(url, request);
-  const reply = await res.json();
+  let reply;
+  try {
+    reply = await res.json();
+  } catch {
+    // A body cut off mid-stream: retry once, then report the failure on stderr.
+    res = await fetch(url, request);
+    try {
+      reply = await res.json();
+    } catch {
+      process.stderr.write(`API Error: connection closed early\n`);
+      process.exit(1);
+    }
+  }
   if (process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST) {
     // Fail with this stderr text once the request is sent (a mid-turn crash).
     process.stderr.write(process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST + "\n");
@@ -231,11 +243,15 @@ async function run(userMessage) {
 
   // FAKE_CLAUDE_EXTRA_GENERATIONS=n: try n more generations, as the real CLI
   // would when it runs a tool and continues the turn.
-  for (
-    let i = 0;
-    i < Number(process.env.FAKE_CLAUDE_EXTRA_GENERATIONS ?? 0);
-    i++
-  ) {
+  // FAKE_CLAUDE_CONTINUE_ON_MAX_TOKENS=1: try one continuation after a
+  // max_tokens stop (unconfirmed on the real CLI; see the ADR).
+  const extra =
+    Number(process.env.FAKE_CLAUDE_EXTRA_GENERATIONS ?? 0) +
+    (process.env.FAKE_CLAUDE_CONTINUE_ON_MAX_TOKENS &&
+    reply.stop_reason === "max_tokens"
+      ? 1
+      : 0);
+  for (let i = 0; i < extra; i++) {
     await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
