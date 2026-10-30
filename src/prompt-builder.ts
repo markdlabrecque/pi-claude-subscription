@@ -8,9 +8,11 @@
  * - Images in non-final messages get placeholder text with console.warn
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve, join, dirname } from "node:path";
-import { homedir } from "node:os";
+import {
+  getCurrentSystemPrompt,
+  normalizeContext,
+  type Context,
+} from "@earendil-works/pi-ai";
 import {
   mapPiToolNameToClaude,
   translatePiArgsToClaude,
@@ -486,31 +488,22 @@ function findFinalUserMessageIndex(messages: any[]): number {
 }
 
 /**
- * Builds the system prompt from the context's systemPrompt field,
- * appending AGENTS.md content if found (walking up from cwd, then global fallback).
- * Sanitizes .pi references to .claude for Claude Code compatibility.
+ * Builds the system prompt from Pi's current instructions: every system
+ * message in the transcript replayed in order, so later content is appended
+ * and sections are replaced or removed. Pi's text is sent exactly as given.
+ * The provider's own guidance follows it as separate paragraphs.
  */
 export function buildSystemPrompt(
   context: { systemPrompt?: string; messages: any[] },
-  cwd: string,
   replay = false,
 ): string {
   const parts: string[] = [];
 
-  if (context.systemPrompt) {
-    parts.push(context.systemPrompt);
-  }
-
-  // Look for AGENTS.md
-  const agentsPath = resolveAgentsMdPath(cwd);
-  if (agentsPath) {
-    try {
-      const content = readFileSync(agentsPath, "utf-8");
-      const sanitized = sanitizeAgentsContent(content);
-      parts.push(sanitized);
-    } catch {
-      // If we can't read it, skip silently
-    }
+  const instructions = getCurrentSystemPrompt(
+    normalizeContext(context as Context).messages,
+  );
+  if (instructions) {
+    parts.push(instructions);
   }
 
   // When conversation history has tool results, instruct Claude to use them
@@ -640,39 +633,4 @@ function toolResultContentToText(content: string | any[]): string {
 function toolResultHasImages(content: string | any[]): boolean {
   if (typeof content === "string" || !Array.isArray(content)) return false;
   return content.some((block) => block.type === "image");
-}
-
-/**
- * Walk up from cwd looking for AGENTS.md, fall back to ~/.pi/agent/AGENTS.md.
- */
-function resolveAgentsMdPath(cwd: string): string | undefined {
-  let current = resolve(cwd);
-  while (true) {
-    const candidate = join(current, "AGENTS.md");
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-
-  // Fall back to global path
-  const globalPath = join(homedir(), ".pi", "agent", "AGENTS.md");
-  if (existsSync(globalPath)) return globalPath;
-
-  return undefined;
-}
-
-/**
- * Sanitize .pi references to .claude in AGENTS.md content
- * for Claude Code compatibility.
- */
-function sanitizeAgentsContent(content: string): string {
-  let sanitized = content;
-  // ~/.pi -> ~/.claude
-  sanitized = sanitized.replace(/~\/\.pi\b/gi, "~/.claude");
-  // .pi/ -> .claude/ (at word boundary or after whitespace/quotes)
-  sanitized = sanitized.replace(/(^|[\s'"`])\.pi\//g, "$1.claude/");
-  // Remaining standalone .pi references
-  sanitized = sanitized.replace(/\b\.pi\b/gi, ".claude");
-  return sanitized;
 }
