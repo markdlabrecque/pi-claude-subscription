@@ -1119,7 +1119,7 @@ describe("streamViaCli", () => {
 
       const proc = (spawn as any).mock.results[0].value;
 
-      // Write result to stdout then close with code 0
+      // Write a complete reply and result to stdout then close with code 0
       const lines = [
         JSON.stringify({
           type: "stream_event",
@@ -1127,6 +1127,30 @@ describe("streamViaCli", () => {
             type: "message_start",
             message: { usage: { input_tokens: 10, output_tokens: 0 } },
           },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "ok" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
         }),
         JSON.stringify({
           type: "stream_event",
@@ -1297,7 +1321,7 @@ describe("streamViaCli", () => {
 
       const proc = (spawn as any).mock.results[0].value;
 
-      // Write normal result to stdout
+      // Write a complete reply and normal result to stdout
       const lines = [
         JSON.stringify({
           type: "stream_event",
@@ -1305,6 +1329,30 @@ describe("streamViaCli", () => {
             type: "message_start",
             message: { usage: { input_tokens: 10, output_tokens: 0 } },
           },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "ok" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
         }),
         JSON.stringify({
           type: "stream_event",
@@ -1579,10 +1627,11 @@ describe("streamViaCli", () => {
       vi.advanceTimersByTime(500);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find((e: any) => e.type === "done");
-      expect(doneEvent).toBeDefined();
-      // Should not crash — stopReason should be "stop" (end_turn maps to stop)
-      expect(doneEvent.reason).toBe("stop");
+      // Should not crash; a completed message with no content is an empty
+      // reply, not a successful stop
+      const message = expectOneTypedError(mockStream, "empty reply");
+      expect(message.content).toEqual([]);
+      expect(message.usage.input).toBe(10);
     });
 
     it("passes through length stopReason unchanged", async () => {
