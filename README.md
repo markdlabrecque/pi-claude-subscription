@@ -101,7 +101,7 @@ Unusable:
 Still sent with the recipe, not removable:
 
 - A first user-message `<system-reminder>` carrying the account email.
-- A `system`-role message with the environment: cwd, platform, shell, OS version, date.
+- A `system`-role message with the environment: cwd, platform, shell, OS version, date. That cwd is the CLI's private temp directory, not the project. The system prompt carries Pi's workspace instead: Pi's own cwd section when the transcript has one, otherwise the `cwd` from Pi's stream options (as in SDK embedding, where the host process cwd differs). Pi's tools run in that workspace.
 - The `x-anthropic-billing-header` and "You are a Claude agent, built on Anthropic's Claude Agent SDK." system blocks.
 
 Recipe (zero tools, no markers upstream):
