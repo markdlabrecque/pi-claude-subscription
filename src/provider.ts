@@ -87,8 +87,8 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
  * Claude CLI can auto-execute the tools.
  *
  * Hardened with: inactivity timeout (180s), subprocess exit handler with stderr
- * surfacing, a request-wide guard against a second terminal result, abort via SIGKILL, and
- * process registry integration for teardown cleanup.
+ * surfacing, a request-wide guard against a second terminal result, abort via
+ * SIGKILL, and process registry integration for teardown cleanup.
  *
  * @param model - The model to use (from pi's model catalog)
  * @param context - The conversation context with messages and system prompt
