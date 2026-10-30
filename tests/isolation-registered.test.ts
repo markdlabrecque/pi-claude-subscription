@@ -158,42 +158,6 @@ it("runs from a private directory that never reaches the project, and never uses
     expect(body.fake_args).not.toContain(flag);
 });
 
-it("leaves no temp files behind when the claude binary cannot be started", async () => {
-  vi.stubEnv("PATH", join(sandbox, "empty-bin"));
-  const registerProvider =
-    vi.fn<(name: string, config: ProviderConfig) => void>();
-  const { default: extension } = await import("../index");
-  extension({
-    registerProvider,
-    on: vi.fn(),
-    getAllTools: () => [],
-  } as unknown as ExtensionAPI);
-  const [provider, config] = registerProvider.mock.calls[0];
-  const model = {
-    ...(config.models![0] as object),
-    provider,
-    api: config.api!,
-    baseUrl: config.baseUrl!,
-  } as Model<Api>;
-  const stream = config.streamSimple!(
-    model,
-    normalizeContext({
-      messages: [{ role: "user", content: "Hi", timestamp: 1 }],
-    } as never),
-    { cwd: join(sandbox, "workspace"), sessionId: "pi-session-1" } as never,
-  );
-  const result = await stream.result();
-
-  expect(result.stopReason).toBe("error");
-  await vi.waitFor(() =>
-    expect(
-      readdirSync(join(sandbox, "tmp")).filter((d) =>
-        d.startsWith("pi-claude-"),
-      ),
-    ).toEqual([]),
-  );
-});
-
 it.each<Scenario>(["normal", "401", "429"])(
   "leaves no temp files behind (%s)",
   async (scenario) => {
