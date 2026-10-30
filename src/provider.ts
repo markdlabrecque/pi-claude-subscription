@@ -226,8 +226,14 @@ export function streamViaCli(
 
       if (isDebugEnabled()) diagnostics = startRequestDiagnostics();
 
-      // One-request relay between the CLI and Anthropic
-      relay = await startRelay({ upstream: env.ANTHROPIC_BASE_URL });
+      // One-request relay between the CLI and Anthropic. Pi's request and
+      // response hooks run there, on the actual request and response.
+      const { onPayload, onResponse } = options ?? {};
+      relay = await startRelay({
+        upstream: env.ANTHROPIC_BASE_URL,
+        onPayload: onPayload && ((payload) => onPayload(payload, model)),
+        onResponse: onResponse && ((response) => onResponse(response, model)),
+      });
 
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
@@ -256,6 +262,27 @@ export function streamViaCli(
       // Write user message to subprocess stdin
       writeUserMessage(proc, prompt);
 
+      // Pi's provider stream observer. With one, each top-level CLI stream
+      // event waits for it before the bridge sees it, so lines (and the exit)
+      // are handled in arrival order through `queue`.
+      const observe = options?.onProviderStreamEvent;
+      let observerFailure: string | undefined;
+      let queue: Promise<void> = Promise.resolve();
+      // Settles on cancel or timeout, so a stuck observer can't hold cleanup
+      let interrupt!: () => void;
+      const interrupted = new Promise<void>((resolve) => (interrupt = resolve));
+      const inOrder = (handle: () => void | Promise<void>) => {
+        if (!observe) return void handle();
+        queue = queue
+          .then(() => (seen.cancelled || ended ? undefined : handle()))
+          .catch((err) => {
+            observerFailure ??= `Provider stream event hook failed: ${err instanceof Error ? err.message : String(err)}`;
+            forceKillProcess(proc!);
+            endStreamWithError(observerFailure);
+          });
+      };
+      const drained = () => Promise.race([queue, interrupted]);
+
       /**
        * End the request as a typed error, after any partial content. Upstream
        * and login failures use their mapped diagnostic, so Pi can retry the
@@ -263,6 +290,12 @@ export function streamViaCli(
        */
       function endStreamWithError(errMsg: string) {
         if (broken) return;
+        // A Pi hook failed or the relay refused the request: say so, as an error
+        const refused = relay?.requestFailure ?? observerFailure;
+        if (refused) {
+          endWithError(bridge.getOutput(), refused);
+          return;
+        }
         const failure: UpstreamFailure | undefined =
           relay?.failure ?? (notLoggedIn ? { status: 401 } : undefined);
         endWithError(
@@ -278,6 +311,7 @@ export function streamViaCli(
         if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(() => {
           seen.inactive = true;
+          interrupt();
           forceKillProcess(proc!);
           endStreamWithError(
             `Claude CLI subprocess timed out: no output for ${INACTIVITY_TIMEOUT_MS / 1000} seconds`,
@@ -289,6 +323,7 @@ export function streamViaCli(
       const requestTimeoutMs = getRequestTimeoutMs(env);
       const requestTimer = setTimeout(() => {
         seen.timedOut = true;
+        interrupt();
         forceKillProcess(proc!);
         endStreamWithError(
           `Claude CLI request timed out after ${requestTimeoutMs / 1000} seconds`,
@@ -301,6 +336,7 @@ export function streamViaCli(
       if (options?.signal) {
         abortHandler = () => {
           seen.cancelled = true;
+          interrupt();
           if (proc) {
             forceKillProcess(proc);
           }
@@ -333,6 +369,10 @@ export function streamViaCli(
       // Handle subprocess close -- surface crashes with stderr and exit code
       proc.on("close", (code: number | null, signal: string | null) => {
         clearTimeout(inactivityTimer);
+        // After any lines still waiting on the observer
+        inOrder(() => onClose(code, signal));
+      });
+      const onClose = (code: number | null, signal: string | null) => {
         if (broken) return; // Break-early kill, expected
         if (code === null) {
           // Killed by a signal: not an abort or our own cleanup, so report it
@@ -351,7 +391,7 @@ export function streamViaCli(
             : `Claude CLI exited unexpectedly with code ${code}`;
           endStreamWithError(message);
         }
-      });
+      };
 
       // A resumed session that is gone or unreadable fails before any output
       // and before any request upstream (a replay must not be a second one)
@@ -373,6 +413,11 @@ export function streamViaCli(
         // Reset inactivity timer on each line of output
         resetInactivityTimer();
 
+        inOrder(() => handleLine(line));
+      });
+      const handleLine = async (line: string) => {
+        if (broken) return; // A queued line after break-early
+
         const msg = parseLine(line);
         if (!msg) return;
 
@@ -380,6 +425,11 @@ export function streamViaCli(
           // Only forward top-level events to pi's event bridge.
           // Sub-agent events (parent_tool_use_id !== null) are internal to the CLI.
           const isTopLevel = !(msg as any).parent_tool_use_id;
+          // Pi's observer sees the parsed CLI event before the bridge does
+          if (isTopLevel && observe) {
+            await observe(msg.event, model);
+            if (broken || seen.cancelled || ended) return;
+          }
           if (isTopLevel) {
             if (msg.event.type === "message_start") seen.messageStart = true;
             if (msg.event.type === "message_stop") seen.messageStop = true;
@@ -427,12 +477,14 @@ export function streamViaCli(
           cleanupProcess(proc!);
           rl.close();
         }
-      });
+      };
 
-      // Wait for readline to close (result received or process ended)
+      // Wait for readline to close (result received or process ended), then
+      // for lines still queued behind the observer
       await new Promise<void>((resolve) => {
         rl.on("close", resolve);
       });
+      await drained();
 
       // stdout can close before the exit code and stderr are in, with or
       // without partial output
@@ -442,6 +494,7 @@ export function streamViaCli(
             ? resolve()
             : proc!.once("close", resolve),
         );
+        await drained();
         if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr())) {
           seen.resumeLost = true;
           return true;
@@ -451,8 +504,9 @@ export function streamViaCli(
       // Push done event after readline closes (async). Pushing synchronously
       // inside handleMessageStop prevents pi from executing tools.
       // The terminal guard drops these once an error was already reported.
-      // A known upstream failure is reported even after partial content.
-      if (relay.failure) endStreamWithError("");
+      // A known upstream failure or refused request is reported even after
+      // partial content.
+      if (relay.failure || relay.requestFailure) endStreamWithError("");
 
       // A thinking-only reply (no text, no tool call) leaves Pi with nothing
       // to act on; the empty-signature thinking block can't be replayed
