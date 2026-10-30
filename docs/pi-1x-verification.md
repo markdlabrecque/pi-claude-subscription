@@ -41,12 +41,16 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 
 ## Third-party tools and attachments (#52)
 
-- SDKs: `@earendil-works/pi-ai@1.4.0`, `@earendil-works/pi-coding-agent@1.4.0` and the `@earendil-works/pi-tui` copy they install. Fake CLI and fake upstream only; synthetic data only.
+- SDKs: `@earendil-works/pi-ai@1.4.0`, `@earendil-works/pi-coding-agent@1.4.0` and the `@earendil-works/pi-tui@1.4.0` copy they install (locked in `package-lock.json`; the fixture resolves the hoisted copy). Vitest 3.2.4. Fake CLI and fake upstream only; synthetic data only.
 - Fixture: `tests/fixtures/pi-manage-todo-list/`, tintinweb/pi-manage-todo-list at `2eb22d3b0c9dd981398d928c8edcc4afce202fa1`, manifest 0.4.0, MIT. `PROVENANCE.json` records each file's source URL and sha256. The fixture is excluded from lint and formatting so it stays byte-for-byte, and it is still typechecked with the project.
 - `tests/extension-compat.test.ts` checks the provenance record and runs the fixture's `manage_todo_list` read through `createAgentSession`, Pi's tool loop and the registered provider. It also runs a small #50 scoped-environment and #51 `onPayload` check.
-- `tests/attachments.test.ts` covers pass-through and typed rejection in replay, resume and resume-to-replay fallback.
+- `tests/attachments.test.ts` covers pass-through and typed rejection in replay, resume and resume-to-replay fallback. `tests/attachments-resume.test.ts` covers resume's tool-result path: the request carries the new tool result and does not resend an earlier image the resumed session already holds.
 - Commands: `npm ci`, then the commands under [Reproduce](#reproduce). The new tests run in the existing `npm test` and `npm run test:coverage` jobs; CI configuration is unchanged.
-- Local result for this change: `npm test` only. Lint, format, typecheck-only and coverage runs, and remote CI results, are not part of this record.
+- Local results for this change, Linux:
+  - `npm test`: 37 test files, 432 tests passed. This includes the focused `tests/extension-compat.test.ts`, `tests/attachments.test.ts`, `tests/attachments-resume.test.ts` and `tests/prompt-builder.test.ts`.
+  - `npm run typecheck` (`tsc --noEmit`, full project including `tests/fixtures/pi-manage-todo-list/`): clean, run by the commit hook.
+  - `npm run test:coverage`, `npm run lint` and `npm run format:check`: not run for this change; the implementing session was not permitted to run them. They remain to be run and recorded.
+  - Remote CI: not run.
 
 ## Boundaries
 
