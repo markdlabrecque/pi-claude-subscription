@@ -1,4 +1,4 @@
-import type { ClaudeApiEvent, TrackedContentBlock } from "./types";
+import type { ClaudeApiEvent, ClaudeUsage, TrackedContentBlock } from "./types";
 import { calculateCost } from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
@@ -128,6 +128,28 @@ export function createEventBridge(
     }
   }
 
+  /**
+   * Record the reported 1-hour cache-write subset. Without a breakdown the
+   * tier is unknown, so the previous value (or the 5-minute fallback) stands.
+   */
+  function applyCacheBreakdown(usage: ClaudeUsage): void {
+    const longWrite = usage.cache_creation?.ephemeral_1h_input_tokens;
+    if (longWrite != null) output.usage.cacheWrite1h = longWrite;
+  }
+
+  /**
+   * Recompute total tokens and cost. The SDK's calculateCost prices
+   * usage.cacheWrite1h at 2x input and the rest at the cacheWrite rate.
+   */
+  function recalculateUsage(): void {
+    output.usage.totalTokens =
+      output.usage.input +
+      output.usage.output +
+      output.usage.cacheRead +
+      output.usage.cacheWrite;
+    calculateCost(model, output.usage);
+  }
+
   function handleMessageStart(event: ClaudeApiEvent): void {
     const usage = event.message?.usage;
     if (usage) {
@@ -135,12 +157,8 @@ export function createEventBridge(
       output.usage.output = usage.output_tokens ?? 0;
       output.usage.cacheRead = usage.cache_read_input_tokens ?? 0;
       output.usage.cacheWrite = usage.cache_creation_input_tokens ?? 0;
-      output.usage.totalTokens =
-        output.usage.input +
-        output.usage.output +
-        output.usage.cacheRead +
-        output.usage.cacheWrite;
-      calculateCost(model, output.usage);
+      applyCacheBreakdown(usage);
+      recalculateUsage();
     }
   }
 
@@ -362,12 +380,12 @@ export function createEventBridge(
       if (usage.input_tokens != null) output.usage.input = usage.input_tokens;
       if (usage.output_tokens != null)
         output.usage.output = usage.output_tokens;
-      output.usage.totalTokens =
-        output.usage.input +
-        output.usage.output +
-        output.usage.cacheRead +
-        output.usage.cacheWrite;
-      calculateCost(model, output.usage);
+      if (usage.cache_read_input_tokens != null)
+        output.usage.cacheRead = usage.cache_read_input_tokens;
+      if (usage.cache_creation_input_tokens != null)
+        output.usage.cacheWrite = usage.cache_creation_input_tokens;
+      applyCacheBreakdown(usage);
+      recalculateUsage();
     }
   }
 
