@@ -386,7 +386,7 @@ export function createEventBridge(
 
       // Update output.content with final arguments
       const contentBlock = output.content[idx] as ToolCall;
-      contentBlock.arguments = finalArgs;
+      contentBlock.arguments = finalArgs as ToolCall["arguments"];
 
       const toolCall = {
         type: "toolCall" as const,
