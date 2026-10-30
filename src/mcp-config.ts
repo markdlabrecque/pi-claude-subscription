@@ -43,6 +43,20 @@ export function getToolDefs(pi: any): McpToolDef[] {
 }
 
 /**
+ * Map the tools Pi offers for one request to MCP definitions, keeping each
+ * name, description and schema exactly as offered.
+ */
+export function toMcpToolDefs(
+  tools: readonly { name: string; description: string; parameters: unknown }[],
+): McpToolDef[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.parameters as Record<string, unknown>,
+  }));
+}
+
+/**
  * Write MCP config and tool schemas to temp files.
  *
  * Creates two temp files, unique per call, for removeMcpConfig to delete:
