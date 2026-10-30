@@ -17,6 +17,7 @@
  * 9. Falls back from resume to replay when the session is gone
  */
 
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   createAssistantMessageEventStream,
@@ -54,6 +55,11 @@ import { removeMcpConfig } from "./mcp-config.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 import { getSessionMode } from "./session-mode.js";
+import { isDebugEnabled } from "./debug-log.js";
+import {
+  startRequestDiagnostics,
+  type TerminalReason,
+} from "./request-diagnostics.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
 
@@ -109,6 +115,22 @@ export function streamViaCli(
     // The CLI refused to start a request because no login is stored
     let notLoggedIn = false;
     let stopRequestTimer: (() => void) | undefined;
+    // Set once break-early kills the subprocess; guards buffered readline lines
+    let broken = false;
+    // Set once the CLI reports its result; a later kill is our own cleanup
+    let resultSeen = false;
+    // What happened to this request, for the debug diagnostics record
+    let diagnostics: ReturnType<typeof startRequestDiagnostics> | undefined;
+    const seen = {
+      messageStart: false,
+      messageStop: false,
+      resultError: false,
+      cancelled: false,
+      timedOut: false,
+      inactive: false,
+      resumeLost: false,
+      threw: false,
+    };
 
     try {
       const cwd = options?.cwd ?? process.cwd();
@@ -176,11 +198,14 @@ export function streamViaCli(
         options?.thinkingBudgets,
       );
 
+      if (isDebugEnabled()) diagnostics = startRequestDiagnostics();
+
       // One-request relay between the CLI and Anthropic
       relay = await startRelay();
 
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
+        seen.cancelled = true;
         endWithoutCli();
         return false;
       }
@@ -210,10 +235,6 @@ export function streamViaCli(
       // Guard against double stream.end() and double error events.
       // First error path wins; subsequent ones are no-ops.
       let streamEnded = false;
-      // Set once break-early kills the subprocess; guards buffered readline lines
-      let broken = false;
-      // Set once the CLI reports its result; a later kill is our own cleanup
-      let resultSeen = false;
 
       /**
        * End the stream with an error, using a "done" event instead of "error".
@@ -266,6 +287,7 @@ export function streamViaCli(
       function resetInactivityTimer() {
         if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(() => {
+          seen.inactive = true;
           forceKillProcess(proc!);
           endStreamWithError(
             `Claude CLI subprocess timed out: no output for ${INACTIVITY_TIMEOUT_MS / 1000} seconds`,
@@ -276,6 +298,7 @@ export function streamViaCli(
       // Per-request timeout: kill the whole process tree, then end as usual
       const requestTimeoutMs = getRequestTimeoutMs();
       const requestTimer = setTimeout(() => {
+        seen.timedOut = true;
         forceKillProcess(proc!);
         endStreamWithError(
           `Claude CLI request timed out after ${requestTimeoutMs / 1000} seconds`,
@@ -287,6 +310,7 @@ export function streamViaCli(
       // Set up abort signal handler -- uses SIGKILL for immediate force-kill
       if (options?.signal) {
         abortHandler = () => {
+          seen.cancelled = true;
           if (proc) {
             forceKillProcess(proc);
           }
@@ -367,6 +391,8 @@ export function streamViaCli(
           // Sub-agent events (parent_tool_use_id !== null) are internal to the CLI.
           const isTopLevel = !(msg as any).parent_tool_use_id;
           if (isTopLevel) {
+            if (msg.event.type === "message_start") seen.messageStart = true;
+            if (msg.event.type === "message_stop") seen.messageStop = true;
             bridge.handleEvent(msg.event);
           }
 
@@ -395,6 +421,7 @@ export function streamViaCli(
           handleControlRequest(msg, proc!.stdin!);
         } else if (msg.type === "result") {
           resultSeen = true;
+          seen.resultError = !!msg.is_error || msg.subtype.startsWith("error");
           if (msg.is_error && NOT_LOGGED_IN.test(msg.result ?? "")) {
             notLoggedIn = true;
             endStreamWithError(msg.result!);
@@ -424,8 +451,10 @@ export function streamViaCli(
             ? resolve()
             : proc!.once("close", resolve),
         );
-        if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr()))
+        if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr())) {
+          seen.resumeLost = true;
           return true;
+        }
       }
 
       // Push done event after readline closes (async). Pushing synchronously
@@ -478,6 +507,7 @@ export function streamViaCli(
         stream.end();
       }
     } catch (err: any) {
+      seen.threw = true;
       stream.push({
         type: "error",
         reason: "error",
@@ -491,6 +521,39 @@ export function streamViaCli(
         options.signal.removeEventListener("abort", abortHandler);
       }
       await relay?.stop();
+      // Written once the CLI exits, without holding up the stream or a retry
+      if (diagnostics) {
+        const ended = relay;
+        const reason = (
+          exitCode: number | null,
+          signal: string | null,
+        ): TerminalReason => {
+          if (seen.threw) return "error";
+          if (seen.cancelled) return "cancelled";
+          if (seen.timedOut) return "timed-out";
+          if (seen.inactive) return "inactivity-timeout";
+          if (seen.resumeLost) return "resume-lost";
+          if (broken) return "tool-use";
+          if (ended?.failure) return "upstream-error";
+          if (resultSeen)
+            return seen.resultError ? "result-error" : "completed";
+          if (exitCode === 0)
+            return seen.messageStart ? "exit-without-result" : "empty-exit";
+          if (exitCode !== null) return "cli-exit-error";
+          return signal ? "killed" : "error";
+        };
+        void diagnostics.finish(proc, (exitCode, signal) => ({
+          requestId: randomUUID(),
+          terminalReason: reason(exitCode, signal),
+          sawMessageStart: seen.messageStart,
+          sawMessageStop: seen.messageStop,
+          sawResult: resultSeen,
+          cancelled: seen.cancelled,
+          timedOut: seen.timedOut,
+          upstreamCount: ended?.upstreamCount ?? 0,
+          rejectedCount: ended?.rejectedCount ?? 0,
+        }));
+      }
     }
     return false;
   };
