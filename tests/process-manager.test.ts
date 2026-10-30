@@ -116,6 +116,23 @@ describe("spawnClaude", () => {
     expect(env.PATH).toBe(process.env.PATH);
   });
 
+  it("keeps a parent Claude Code session's identity out of the CLI's environment", () => {
+    const planted = {
+      CLAUDECODE: "1",
+      CLAUDE_CODE_ENTRYPOINT: "cli",
+    };
+    Object.assign(process.env, planted);
+    try {
+      spawnClaude("claude-sonnet-4-5-20250929");
+    } finally {
+      for (const key of Object.keys(planted)) delete process.env[key];
+    }
+    const env = (spawn as any).mock.calls[0][2].env;
+
+    for (const key of Object.keys(planted)) expect(env).not.toHaveProperty(key);
+    expect(env.PATH).toBe(process.env.PATH);
+  });
+
   it("returns the spawned ChildProcess", () => {
     const proc = spawnClaude("claude-sonnet-4-5-20250929");
     expect(proc).toBeDefined();
