@@ -13,8 +13,8 @@
  * 7. Implements break-early: kills subprocess at message_stop when any
  *    tool_use block was seen, so pi runs the tools
  * 8. Hardened lifecycle: inactivity and per-request timeouts, subprocess exit
- *    handler, one typed terminal result per request, abort via SIGKILL,
- *    process registry
+ *    handler, one typed terminal result per request, abort reported as a
+ *    typed cancellation before a SIGKILL, process registry
  * 9. Falls back from resume to replay when the session is gone
  */
 
@@ -128,6 +128,25 @@ export function streamViaCli(
     stream.end();
   };
 
+  /**
+   * End the request as cancelled by Pi. The message keeps any partial
+   * content and measured usage.
+   */
+  const endWithAbort = (output: AssistantMessage) => {
+    if (ended) return;
+    ended = true;
+    stream.push({
+      type: "error",
+      reason: "aborted",
+      error: {
+        ...output,
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      },
+    });
+    stream.end();
+  };
+
   /** End the request successfully with the accumulated message. */
   const endWithDone = (output: AssistantMessage) => {
     if (ended) return;
@@ -152,6 +171,10 @@ export function streamViaCli(
     // The CLI refused to start a request because no login is stored
     let notLoggedIn = false;
     let stopRequestTimer: (() => void) | undefined;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+    let closeLines: (() => void) | undefined;
+    // Releases a wait on Pi's stream observer, so cancel can't be held by it
+    let interruptQueue: (() => void) | undefined;
     // Set once break-early kills the subprocess; guards buffered readline lines
     let broken = false;
     // Set once the CLI reports its result; a later kill is our own cleanup
@@ -175,10 +198,24 @@ export function streamViaCli(
       const bridge = createEventBridge(stream, model, getPiToolNames(context));
       output = bridge.getOutput();
 
-      // Pi already cancelled: nothing to start
-      if (options?.signal?.aborted) {
-        endWithDone(output);
-        return false;
+      // Cancellation settles the request first, then tears down whatever
+      // has started; later callbacks find the request already ended
+      if (options?.signal) {
+        abortHandler = () => {
+          // A request that already ended keeps its own outcome
+          if (!ended) seen.cancelled = true;
+          endWithAbort(bridge.getOutput());
+          interruptQueue?.();
+          if (proc) forceKillProcess(proc);
+          closeLines?.();
+        };
+
+        // Pi already cancelled: nothing to start
+        if (options.signal.aborted) {
+          abortHandler();
+          return false;
+        }
+        options.signal.addEventListener("abort", abortHandler, { once: true });
       }
 
       // Reject attachments the CLI path cannot carry, before spawning anything
@@ -237,8 +274,7 @@ export function streamViaCli(
 
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
-        seen.cancelled = true;
-        endWithDone(output);
+        endWithAbort(output);
         return false;
       }
 
@@ -271,6 +307,7 @@ export function streamViaCli(
       // Settles on cancel or timeout, so a stuck observer can't hold cleanup
       let interrupt!: () => void;
       const interrupted = new Promise<void>((resolve) => (interrupt = resolve));
+      interruptQueue = interrupt;
       const inOrder = (handle: () => void | Promise<void>) => {
         if (!observe) return void handle();
         queue = queue
@@ -305,8 +342,6 @@ export function streamViaCli(
       }
 
       // Inactivity timeout: kill subprocess if no stdout for INACTIVITY_TIMEOUT_MS
-      let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
-
       function resetInactivityTimer() {
         if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(() => {
@@ -332,24 +367,6 @@ export function streamViaCli(
       requestTimer.unref();
       stopRequestTimer = () => clearTimeout(requestTimer);
 
-      // Set up abort signal handler -- uses SIGKILL for immediate force-kill
-      if (options?.signal) {
-        abortHandler = () => {
-          seen.cancelled = true;
-          interrupt();
-          if (proc) {
-            forceKillProcess(proc);
-          }
-        };
-
-        // Aborted while the relay started: the kill closes stdout and ends the stream
-        if (options.signal.aborted) abortHandler();
-        else
-          options.signal.addEventListener("abort", abortHandler, {
-            once: true,
-          });
-      }
-
       // Track tool_use blocks for break-early decision at message_stop
       let sawToolCall = false;
       // Set up readline for line-by-line NDJSON parsing
@@ -358,6 +375,7 @@ export function streamViaCli(
         crlfDelay: Infinity,
         terminal: false,
       });
+      closeLines = () => rl.close();
 
       // Handle process error -- use endStreamWithError for guard
       proc.on("error", (err: Error) => {
@@ -409,6 +427,8 @@ export function streamViaCli(
       // iterator batches lines, breaking real-time streaming to pi.
       rl.on("line", (line: string) => {
         if (broken) return; // Guard: ignore buffered lines after break-early
+        // A settled request's terminal message must not change
+        if (ended) return;
 
         // Reset inactivity timer on each line of output
         resetInactivityTimer();
@@ -533,8 +553,12 @@ export function streamViaCli(
         output ?? createAssistantOutput(model),
         err?.message || "Unexpected error in streamViaCli",
       );
+      // Setup failed after the CLI started: nothing else will reap it
+      if (proc) forceKillProcess(proc);
+      closeLines?.();
     } finally {
       stopRequestTimer?.();
+      clearTimeout(inactivityTimer);
       // Clean up abort listener
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);

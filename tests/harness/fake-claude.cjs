@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global fetch */
+/* global fetch, setInterval */
 // Minimal stand-in for `claude -p --input-format stream-json --output-format stream-json`.
 // Reads one user message from stdin, forwards the prompt upstream (like the real CLI
 // would), and replays the reply as stream-json events.
@@ -298,6 +298,23 @@ async function run(userMessage) {
       errors: [process.env.FAKE_CLAUDE_RESULT_ERROR],
     });
     process.exit(1);
+  }
+  if (process.env.FAKE_CLAUDE_PARTIAL_HANG) {
+    // Stream FAKE_CLAUDE_PARTIAL_TEXT, then hang without finishing the turn.
+    emit({ type: "system", subtype: "init", session_id: "fake-session" });
+    event({ type: "message_start", message: { usage: reply.usage } });
+    event({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    });
+    event({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: process.env.FAKE_CLAUDE_PARTIAL_TEXT },
+    });
+    setInterval(() => {}, 1000);
+    return;
   }
   if (!res.ok) {
     // The real CLI reports an API failure on stderr and exits non-zero.
