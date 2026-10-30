@@ -10,6 +10,7 @@ export type Scenario =
   | "made_up_mcp_tool"
   | "custom_tool"
   | "t3_code_tool"
+  | "todo_read_tool"
   | "echo_tool_result"
   | "401"
   | "429"
@@ -136,6 +137,19 @@ export async function startFakeUpstream(
           break;
         case "t3_code_tool":
           body = toolUse("mcp__custom-tools__mcp__t3_code__link_pull_request");
+          break;
+        case "todo_read_tool":
+          body = message(
+            [
+              {
+                type: "tool_use",
+                id: "toolu_todo_read",
+                name: "mcp__custom-tools__manage_todo_list",
+                input: { operation: "read" },
+              },
+            ],
+            "tool_use",
+          );
           break;
         case "custom_tool":
           body = message(
