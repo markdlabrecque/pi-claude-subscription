@@ -17,6 +17,8 @@ const ENV_KEYS = [
   "TMPDIR",
   "FAKE_CLAUDE_RECORD_FILE",
   "PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS",
+  "FAKE_CLAUDE_PARTIAL_HANG",
+  "FAKE_CLAUDE_PARTIAL_TEXT",
 ];
 
 let upstream: FakeUpstream | undefined;
@@ -52,10 +54,13 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Run one turn against the fake upstream; `afterStart` runs once the CLI is up. */
+/**
+ * Run one turn against the fake upstream. `cancel` has Pi cancel once the
+ * CLI's request is upstream, or once partial text has streamed.
+ */
 async function runTurn(
   scenario: Scenario,
-  afterStart?: (abort: () => void) => void,
+  cancel?: "after-request" | "after-text",
 ) {
   upstream = await startFakeUpstream([scenario]);
   claude = installFakeClaude(upstream.url);
@@ -65,11 +70,19 @@ async function runTurn(
     { messages: [{ role: "user", content: "Say hello", timestamp: 1 }] },
     { signal: controller.signal, mcpConfigPath: writeMcpConfig([]) },
   );
-  if (afterStart) {
+  if (cancel === "after-request") {
     await vi.waitFor(() => expect(upstream!.requests).toHaveLength(1));
-    afterStart(() => controller.abort());
+    controller.abort();
   }
-  return stream.result() as Promise<any>;
+  const terminals: any[] = [];
+  for await (const event of stream) {
+    if (event.type === "done" || event.type === "error") terminals.push(event);
+    if (cancel === "after-text" && event.type === "text_delta") {
+      controller.abort();
+    }
+  }
+  const message: any = await stream.result();
+  return { message, terminals };
 }
 
 async function expectNothingLeft() {
@@ -91,7 +104,7 @@ describe("stopping a request leaves nothing behind", () => {
     ["auth error", "401"],
     ["rate limit", "429"],
   ] as const)("after %s", async (_name, scenario) => {
-    const message = await runTurn(scenario);
+    const { message } = await runTurn(scenario);
 
     expect(message.stopReason).toBe("error");
     await expectNothingLeft();
@@ -100,7 +113,7 @@ describe("stopping a request leaves nothing behind", () => {
   it("after the timeout kills a hung CLI", async () => {
     process.env.PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS = "500";
 
-    const message = await runTurn("hang");
+    const { message } = await runTurn("hang");
 
     expect(message.stopReason).toBe("error");
     expect(message.errorMessage).toContain("timed out");
@@ -108,8 +121,34 @@ describe("stopping a request leaves nothing behind", () => {
   });
 
   it("after Pi cancels", async () => {
-    await runTurn("hang", (abort) => abort());
+    const { message, terminals } = await runTurn("hang", "after-request");
 
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].type).toBe("error");
+    expect(terminals[0].reason).toBe("aborted");
+    expect(terminals[0].error).toEqual(message);
+    expect(message.stopReason).toBe("aborted");
+    expect(message.errorMessage).toBeTruthy();
+    expect(message.content).toEqual([]);
+    await expectNothingLeft();
+  });
+
+  it("after Pi cancels a reply that has partial text", async () => {
+    process.env.FAKE_CLAUDE_PARTIAL_HANG = "1";
+    process.env.FAKE_CLAUDE_PARTIAL_TEXT = "Half a sentence";
+
+    const { message, terminals } = await runTurn("normal", "after-text");
+
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].type).toBe("error");
+    expect(terminals[0].reason).toBe("aborted");
+    expect(terminals[0].error).toEqual(message);
+    expect(message.stopReason).toBe("aborted");
+    expect(message.errorMessage).toBeTruthy();
+    expect(message.content).toEqual([
+      expect.objectContaining({ type: "text", text: "Half a sentence" }),
+    ]);
+    expect(message.usage.input).toBe(10);
     await expectNothingLeft();
   });
 });

@@ -424,7 +424,9 @@ describe("streamViaCli", () => {
     };
     const controller = new AbortController();
 
-    streamViaCli(model, context, { signal: controller.signal });
+    const stream = streamViaCli(model, context, {
+      signal: controller.signal,
+    }) as any;
     await vi.advanceTimersByTimeAsync(0);
 
     const proc = (spawn as any).mock.results[0].value;
@@ -438,6 +440,16 @@ describe("streamViaCli", () => {
     // End stdout to allow readline loop to finish and prevent hanging
     proc.stdout.end();
     await vi.advanceTimersByTimeAsync(100);
+
+    // One typed cancellation, not a successful end
+    const terminals = stream._events.filter(
+      (e: any) => e.type === "done" || e.type === "error",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].reason).toBe("aborted");
+    expect(terminals[0].error.stopReason).toBe("aborted");
+    expect(terminals[0].error.errorMessage).toBeTruthy();
+    expect(stream.end).toHaveBeenCalledTimes(1);
   });
 
   it("routes control_request through handleControlRequest and writes response to stdin", async () => {
