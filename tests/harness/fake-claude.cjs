@@ -316,6 +316,17 @@ async function run(userMessage) {
     setInterval(() => {}, 1000);
     return;
   }
+  if (process.env.FAKE_CLAUDE_STREAM_SCRIPT) {
+    // Replay these stdout lines verbatim (objects as JSON, strings raw), then
+    // exit with FAKE_CLAUDE_EXIT_CODE (default 0). EOF with no completion is
+    // whatever the script leaves out.
+    for (const line of JSON.parse(process.env.FAKE_CLAUDE_STREAM_SCRIPT)) {
+      process.stdout.write(
+        (typeof line === "string" ? line : JSON.stringify(line)) + "\n",
+      );
+    }
+    process.exit(Number(process.env.FAKE_CLAUDE_EXIT_CODE ?? 0));
+  }
   if (!res.ok) {
     // The real CLI reports an API failure on stderr and exits non-zero.
     process.stderr.write(`API Error: ${res.status} ${JSON.stringify(reply)}\n`);
