@@ -1,17 +1,13 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { streamViaCli } from "../src/provider";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   startFakeUpstream,
   installFakeClaude,
   type FakeUpstream,
   type FakeClaude,
-  model,
 } from "./harness";
 
-const PI_AI =
-  process.env.HOME +
-  "/.local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
-const piAi: any = await import(/* @vite-ignore */ PI_AI).catch(() => null);
+import * as piAi from "@earendil-works/pi-ai";
 
 let upstream: FakeUpstream | undefined;
 let claude: FakeClaude | undefined;
@@ -21,19 +17,44 @@ afterEach(async () => {
   claude = upstream = undefined;
 });
 
-const tools = [{ name: "read" }, { name: "mcp__t3-code__link_pull_request" }];
+const tools = ["read", "mcp__t3-code__link_pull_request"].map((name) => ({
+  name,
+  description: name,
+  parameters: piAi.Type.Object({ path: piAi.Type.String() }),
+}));
 
-async function run(context: any) {
-  const stream = streamViaCli(model, context);
+async function run(context: piAi.TranscriptContext) {
+  // Each case loads a stable inventory. Changing inventories remain a separate ticket.
+  vi.resetModules();
+  const registerProvider = vi.fn();
+  const { default: extension } = await import("../index");
+  extension({
+    registerProvider,
+    on: vi.fn(),
+    getAllTools: () => piAi.getCurrentTools(context.messages),
+  } as unknown as ExtensionAPI);
+  expect(registerProvider).toHaveBeenCalledOnce();
+  const [provider, config] = registerProvider.mock.calls[0];
+  const model = {
+    ...config.models[0],
+    provider,
+    api: config.api,
+    baseUrl: config.baseUrl,
+  };
+  const stream = config.streamSimple(model, context);
   for await (const _ of stream);
   return (await stream.result()) as any;
 }
 
-describe.skipIf(!piAi)("context built by Pi's real normalizeContext", () => {
+describe("context built by Pi's real normalizeContext", () => {
   it("has no context.tools, tools only in toolsAdded", () => {
-    const ctx = piAi.normalizeContext({ messages: [], systemPrompt: "s", tools });
-    expect(ctx.tools).toBeUndefined();
-    expect(ctx.messages[0].toolsAdded).toEqual(tools);
+    const ctx = piAi.normalizeContext({
+      messages: [],
+      systemPrompt: "s",
+      tools,
+    });
+    expect("tools" in ctx).toBe(false);
+    expect(piAi.getCurrentTools(ctx.messages)).toEqual(tools);
   });
 
   it("underscore call resolves to the hyphenated Pi tool", async () => {
@@ -59,7 +80,9 @@ describe.skipIf(!piAi)("context built by Pi's real normalizeContext", () => {
         role: "toolResult",
         toolCallId: r.content[0].id,
         toolName: r.content[0].name,
-        content: [{ type: "text", text: "Tool totally_made_up_tool not found" }],
+        content: [
+          { type: "text", text: "Tool totally_made_up_tool not found" },
+        ],
         isError: true,
         timestamp: 2,
       });
@@ -73,7 +96,7 @@ describe.skipIf(!piAi)("context built by Pi's real normalizeContext", () => {
     claude = installFakeClaude(upstream.url);
     const ctx = piAi.normalizeContext({
       messages: [{ role: "user", content: "Link", timestamp: 1 }],
-      tools: [{ name: "read" }],
+      tools: tools.slice(0, 1),
     });
     const r = await run(ctx);
     expect(r.content[0].name).toBe("mcp__t3_code__link_pull_request");

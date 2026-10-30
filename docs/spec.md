@@ -18,15 +18,19 @@ Pi sessions often run unattended in lightweight containers, so any failure that 
 
 The accepted support policy is **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` SDK are unsupported. Do not add dual-version adapters, legacy context fallbacks or a 0.52 test matrix. [ADR-0001](adr/0001-pi-1x-only-support.md) records the decision and trade-offs.
 
-This is the target contract, not a claim that the current implementation has completed the migration. Before declaring Pi 1.x support:
+The minimum supported SDK is **1.4.0**, verified with exactly `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`. Node.js **22.19.0 or later** is required. Host SDKs are wildcard peers for Pi package loading, while development dependencies and the lockfile pin 1.4.0. See [README setup](../README.md#setup) for host installation and `npm ci` / `pi install .` for this checkout. The published 0.3.1 package predates the migration.
 
-- Migrate imports, dependency metadata, model catalog access and provider registration to the 1.x SDK.
-- Read effective system instructions and tools from normalized transcript messages using the supported SDK helpers. Preserve instruction updates, tool loadout changes and Pi's workspace while retaining CLI isolation.
-- Verify model capabilities and thinking-level mapping, terminal events, cancellation and usage against the supported SDK.
-- Honor supported provider observation hooks and provider-scoped environment options. Document CLI limitations and warn about unsupported request mutation rather than promising native-provider parity.
-- Record a minimum supported 1.x version and exact tested versions. Install reproducible SDK test dependencies in CI; compatibility tests must not silently skip because a developer's global Pi installation is absent.
+Mandatory installed-SDK tests verify provider registration, settings-driven startup model selection, catalog capabilities, CLI thinking mappings, API-key switching, normalized text and stable-inventory tool turns, measured usage, isolation and the one-upstream-request guard. They cannot skip for a missing global SDK. CI uses Node 22.19.0 with the exact SDK pair on Linux, macOS and Windows. Local Linux verification also ran on Node 24.20.0. See [verification evidence](pi-1x-verification.md); remote CI execution is not claimed.
 
-Support does not automatically extend to Pi-derived hosts or every 1.x release. Subscription billing-pool verification remains a separate human acceptance check.
+The remaining target contract is tracked separately:
+
+- #40 owns effective system instructions, including normalized prompt sections and updates. #43 follows it for workspace guidance.
+- #42 owns current-request tool inventory, changing loadouts and activation semantics. Stable-inventory tests do not certify these behaviors.
+- #41 owns truthful failure/cancellation terminal states. Existing error/cancel cleanup regressions remain mandatory.
+- #14 retains broader extension compatibility. #50 owns provider-scoped environment, #51 request edits and observation hooks, and #52 third-party tool/attachment compatibility. The CLI path does not yet honor those hooks.
+- #34 owns cache-write pricing; #35 retains human account-side billing verification. Cache optimization is deferred until #39, #40 and #42 are complete.
+
+Support does not automatically extend to Pi-derived hosts or every 1.x release. These foundation checks do not certify complete Pi 1.x correctness or native-provider parity.
 
 ## Solution
 

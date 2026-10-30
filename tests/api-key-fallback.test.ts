@@ -1,14 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const streamSimpleAnthropic = vi.fn(() => "anthropic-stream");
+afterEach(() => vi.unstubAllEnvs());
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  getEnvApiKey: vi.fn(() => "sk-env-key"),
-  getModels: vi.fn(() => [
-    { id: "claude-sonnet-4-5", api: "anthropic-messages" },
-  ]),
-  streamSimpleAnthropic: (...args: unknown[]) =>
-    (streamSimpleAnthropic as any)(...args),
+vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
+  anthropicProvider: () => ({
+    getModels: () => [{ id: "claude-sonnet-4-5", api: "anthropic-messages" }],
+  }),
+}));
+vi.mock("@earendil-works/pi-ai/api/anthropic-messages", () => ({
+  streamSimple: (...args: unknown[]) => (streamSimpleAnthropic as any)(...args),
 }));
 
 import {
@@ -32,7 +33,10 @@ describe("isApiKeyFallbackEnabled", () => {
 });
 
 describe("streamViaAnthropic", () => {
-  beforeEach(() => streamSimpleAnthropic.mockClear());
+  beforeEach(() => {
+    streamSimpleAnthropic.mockClear();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-env-key");
+  });
 
   it("sends the request through the Anthropic provider with the env API key", () => {
     const context = { messages: [] };

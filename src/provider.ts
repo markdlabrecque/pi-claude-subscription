@@ -19,10 +19,11 @@
 
 import { createInterface } from "node:readline";
 import {
-  AssistantMessageEventStream,
+  createAssistantMessageEventStream,
+  type AssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import {
   buildPrompt,
   buildReplayPrompt,
@@ -95,9 +96,7 @@ export function streamViaCli(
   },
   options?: StreamViaCLiOptions,
 ): AssistantMessageEventStream {
-  // @ts-expect-error — tsc can't verify AssistantMessageEventStream is a value
-  // through pi-ai's `export *` re-export chain. The class constructor exists at runtime.
-  const stream = new AssistantMessageEventStream();
+  const stream = createAssistantMessageEventStream();
 
   /**
    * One CLI attempt. Resolves true when a resumed session was missing or
@@ -206,11 +205,7 @@ export function streamViaCli(
       writeUserMessage(proc, prompt);
 
       // Create event bridge (before endStreamWithError so bridge is in scope)
-      const bridge = createEventBridge(
-        stream,
-        model,
-        getPiToolNames(context),
-      );
+      const bridge = createEventBridge(stream, model, getPiToolNames(context));
 
       // Guard against double stream.end() and double error events.
       // First error path wins; subsequent ones are no-ops.
@@ -454,9 +449,7 @@ export function streamViaCli(
           blocks.length > 0 &&
           blocks.every(
             (b: any) =>
-              b.type === "thinking" &&
-              !b.thinking &&
-              !b.thinkingSignature,
+              b.type === "thinking" && !b.thinking && !b.thinkingSignature,
           );
         if (onlyEmptyThinking) {
           streamEnded = true;

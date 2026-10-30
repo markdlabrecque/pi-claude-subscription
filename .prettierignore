@@ -5,3 +5,6 @@ coverage/
 *.tsbuildinfo
 package-lock.json
 .planning/
+.claude/worktrees/
+# Generated planning artifacts, including bundled vendor code.
+docs/plans/*.html

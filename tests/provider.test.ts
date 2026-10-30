@@ -35,7 +35,7 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => Buffer.from("2.1.301")),
 }));
 
-// Mock @mariozechner/pi-ai
+// Mock @earendil-works/pi-ai
 const mockModels = [
   {
     id: "claude-sonnet-4-5-20250929",
@@ -59,6 +59,15 @@ const mockModels = [
     contextWindow: 200000,
     maxTokens: 16384,
   },
+  {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1000000,
+    maxTokens: 128000,
+  },
 ];
 
 const { MockAssistantMessageEventStream } = vi.hoisted(() => {
@@ -71,9 +80,19 @@ const { MockAssistantMessageEventStream } = vi.hoisted(() => {
   return { MockAssistantMessageEventStream };
 });
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  getModels: vi.fn(() => mockModels),
-  AssistantMessageEventStream: MockAssistantMessageEventStream,
+vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
+  anthropicProvider: () => ({
+    getModels: () =>
+      mockModels.map((m) => ({
+        ...m,
+        thinkingLevelMap: m.id.includes("opus") ? { max: "max" } : undefined,
+      })),
+  }),
+}));
+
+vi.mock("@earendil-works/pi-ai", () => ({
+  createAssistantMessageEventStream: () =>
+    new MockAssistantMessageEventStream(),
   calculateCost: vi.fn(),
 }));
 
@@ -145,7 +164,7 @@ describe("provider registration (default export)", () => {
     expect(firstModel.cost).toBeDefined();
   });
 
-  it("lists a Fable model when the pi-ai catalog has none", async () => {
+  it("lists exactly one Fable model from the catalog", async () => {
     const registerProvider = vi.fn();
     const mockPi = { registerProvider, on: vi.fn() } as any;
 

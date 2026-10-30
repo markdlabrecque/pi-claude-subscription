@@ -5,10 +5,11 @@
  * subprocess using stream-json NDJSON protocol.
  */
 
-import { getModels } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { streamViaCli } from "./src/provider.js";
 import { filterLatestPerFamily } from "./src/model-filter.js";
+import { getCliThinkingLevelMap } from "./src/thinking-config.js";
 import {
   validateCliPresence,
   validateCliAuth,
@@ -83,29 +84,20 @@ export default function (pi: ExtensionAPI) {
     validateCliAuth(); // warns if not authenticated
 
     const models = filterLatestPerFamily(
-      getModels("anthropic").map((model) => ({
-        id: model.id,
-        name: model.name,
-        reasoning: model.reasoning,
-        input: model.input,
-        cost: model.cost,
-        contextWindow: model.contextWindow,
-        maxTokens: model.maxTokens,
-      })),
+      anthropicProvider()
+        .getModels()
+        .map((model) => ({
+          id: model.id,
+          name: model.name,
+          reasoning: model.reasoning,
+          input: model.input,
+          cost: model.cost,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+          inputLimits: model.inputLimits,
+          thinkingLevelMap: getCliThinkingLevelMap(model),
+        })),
     );
-
-    // The pi-ai catalog may predate Fable; the CLI accepts it by alias.
-    if (!models.some((m) => m.id.includes("fable"))) {
-      models.push({
-        id: "fable",
-        name: "Claude Fable",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      });
-    }
 
     // Ensure all registered tools are active so pi can execute them.
     // Some tools (find, grep, ls) are registered but not activated by default.

@@ -10,6 +10,7 @@ export type Scenario =
   | "made_up_mcp_tool"
   | "custom_tool"
   | "t3_code_tool"
+  | "echo_tool_result"
   | "401"
   | "429"
   | "503"
@@ -92,6 +93,32 @@ export async function startFakeUpstream(
         case "normal":
           body = message([{ type: "text", text: NORMAL_TEXT }], "end_turn");
           break;
+        case "echo_tool_result": {
+          // Echo only an actual tool-result turn in the replay request. Missing
+          // history must fail, not produce a canned successful final answer.
+          const request = requests[index].body as {
+            messages?: { content?: unknown }[];
+          };
+          const text = (request.messages ?? [])
+            .flatMap((entry) =>
+              Array.isArray(entry.content) ? entry.content : [],
+            )
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("\n");
+          const result = text.match(
+            /<turn role="tool"(?: name="[^"]+")?>\n([\s\S]*?)\n<\/turn>/,
+          );
+          if (!result?.[1]) {
+            ({ status, body } = error("missing_tool_result", 400));
+          } else {
+            body = message(
+              [{ type: "text", text: `Tool returned: ${result[1]}` }],
+              "end_turn",
+            );
+          }
+          break;
+        }
         case "thinking_only":
           body = message([{ type: "thinking", thinking: "" }], "end_turn");
           break;

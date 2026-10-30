@@ -12,24 +12,29 @@ The extension registers a custom pi provider, `pi-claude-subscription`. Each req
 
 This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` packages are no longer supported. We will not maintain a dual-version adapter or a 0.52 compatibility test suite. See [ADR-0001](docs/adr/0001-pi-1x-only-support.md) for the decision.
 
-The SDK migration is not complete. The current source and package metadata still use the 0.52 SDK, and known Pi 1.x gaps include instruction forwarding and current-request tool inventory. This decision does not certify the current release as Pi 1.x compatible. The migration must document the minimum supported and tested 1.x versions and verify them in CI before claiming support.
+The minimum supported Pi version is **1.4.0**. The exact tested SDK pair is `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`, pinned in development dependencies and the lockfile. Mandatory local-SDK tests cover startup model selection, registered text/tool requests, thinking mappings, API-key fallback, isolation and the one-request guard. CI runs the same suite on Node 22.19.0 across Linux, macOS and Windows. Local verification ran on Linux with Node 22.19.0 and 24.20.0; remote CI results are not implied. See [migration verification](docs/pi-1x-verification.md).
+
+Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. Known follow-ups are listed below.
 
 ## Requirements
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude auth login`; `claude` on PATH)
 - A Claude Pro or Max subscription
-- [Pi 1.x](https://github.com/earendil-works/pi), subject to the migration status above. Compatibility with GSD or other Pi-derived hosts is not implied.
+- [Pi 1.4.0 or later in the 1.x family](https://github.com/earendil-works/pi). Only SDK 1.4.0 is verified here; later versions require their own checks. Compatibility with GSD or other Pi-derived hosts is not implied.
+- Node.js 22.19.0 or later.
 - macOS or Linux. On Windows, use WSL.
 
 ## Setup
 
-After the Pi 1.x migration is verified, add to `~/.pi/agent/settings.json`:
+Install the supported host first, then install this checkout for the migrated code:
 
-```json
-{
-  "packages": ["npm:pi-claude-subscription"]
-}
+```bash
+npm install -g @earendil-works/pi-coding-agent@1.4.0
+npm ci
+pi install .
 ```
+
+Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings. The published `pi-claude-subscription@0.3.1` predates this migration; do not use it to verify the new SDK contract. No global Pi installation, real CLI or login is needed to run the tests.
 
 Then select a model via `/model` in the interactive UI. Haiku, Sonnet, Opus and Fable are listed under the `pi-claude-subscription` provider.
 
@@ -37,7 +42,8 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 ## Settings
 
-- Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
+- Models come from the installed SDK's Anthropic catalog, with one latest entry per Haiku, Sonnet, Opus and Fable family. Catalog image limits, context/output limits and cost metadata are retained. Fable uses catalog metadata, not a synthetic alias.
+- Thinking levels respect catalog exclusions. Existing mappings remain: minimal/low use CLI low; medium/high use medium/high outside Opus; non-Opus xhigh uses high. Opus medium uses high and high/xhigh use max. Explicit max uses max only for a catalog model declaring max support; unknown models cannot gain max through a family-name substring. Off, when supported, and an unspecified level omit the CLI effort flag, not a promise to disable CLI thinking. Custom token budgets remain unsupported and produce a warning. These mappings were exercised with the fake CLI, using the effort flag vocabulary inspected from Claude Code 2.1.312 help, not live reasoning-quality tests.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
 - Request timeout: a request is stopped after 10 minutes by default. Set `PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS` to a number of milliseconds to change it (invalid or non-positive values use the default). It is read on every request. On timeout, or when Pi cancels, the whole CLI process tree is killed (process group on macOS/Linux), and the temp directory and relay port are released.
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
@@ -48,7 +54,11 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
 - Images and documents are passed through, including documents in earlier turns, which are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit. Images in earlier turns become a text placeholder. Other attachment types are rejected with an error in the latest user message and dropped with a warning in earlier turns.
-- Extensions that edit the raw API request are not supported by this CLI-backed provider. Pi 1.x exposes provider instrumentation hooks, but the current implementation does not honor them or warn about unsupported request mutation. The migration must document supported observation hooks and warn where request-editing hooks cannot be honored. Native-provider parity is not promised.
+- Effective normalized system-instruction forwarding remains [#40](https://github.com/markdlabrecque/pi-claude-subscription/issues/40). Workspace guidance remains [#43](https://github.com/markdlabrecque/pi-claude-subscription/issues/43).
+- Current-request tool inventory and activation remain [#42](https://github.com/markdlabrecque/pi-claude-subscription/issues/42). The migration tests use a stable offered tool set, not changing or deferred inventories.
+- Truthful terminal failure/cancellation statuses remain [#41](https://github.com/markdlabrecque/pi-claude-subscription/issues/41). Existing cleanup tests do not certify all terminal statuses.
+- Broader extension compatibility remains [#14](https://github.com/markdlabrecque/pi-claude-subscription/issues/14), including provider-scoped environment [#50](https://github.com/markdlabrecque/pi-claude-subscription/issues/50), request edits/observation hooks [#51](https://github.com/markdlabrecque/pi-claude-subscription/issues/51), and third-party tools/attachments [#52](https://github.com/markdlabrecque/pi-claude-subscription/issues/52). The CLI path does not yet honor those instrumentation hooks. Native-provider parity is not promised.
+- Cache-write pricing remains [#34](https://github.com/markdlabrecque/pi-claude-subscription/issues/34), and account-side billing verification remains [#35](https://github.com/markdlabrecque/pi-claude-subscription/issues/35). Cache optimization is deferred until [#39](https://github.com/markdlabrecque/pi-claude-subscription/issues/39), #40 and #42 are complete.
 - Native Windows is not supported. On Windows, use WSL.
 
 ## Spike findings
