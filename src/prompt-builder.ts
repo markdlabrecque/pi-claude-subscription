@@ -184,6 +184,15 @@ export function buildResumePrompt(context: {
     }
   }
 
+  // Pi continuing its tool loop: the session already holds the user turn,
+  // so send only what follows the last assistant turn (its tool results).
+  for (let i = messages.length - 1; i > finalUserIndex; i--) {
+    if (messages[i].role === "assistant") {
+      startIdx = i + 1;
+      break;
+    }
+  }
+
   for (let i = startIdx; i < messages.length; i++) {
     newMessages.push(messages[i]);
   }
