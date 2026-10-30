@@ -138,8 +138,8 @@ export function createEventBridge(
   }
 
   /**
-   * Recompute total tokens and cost. Cache writes reported as 1-hour are
-   * priced at 2x input; the rest at the model's (5-minute) cacheWrite rate.
+   * Recompute total tokens and cost. The SDK's calculateCost prices
+   * usage.cacheWrite1h at 2x input and the rest at the cacheWrite rate.
    */
   function recalculateUsage(): void {
     output.usage.totalTokens =
@@ -148,15 +148,6 @@ export function createEventBridge(
       output.usage.cacheRead +
       output.usage.cacheWrite;
     calculateCost(model, output.usage);
-    const longWrite = output.usage.cacheWrite1h;
-    if (longWrite == null) return;
-    const cost = output.usage.cost;
-    const shortWrite = output.usage.cacheWrite - longWrite;
-    const cacheWriteCost =
-      (model.cost.cacheWrite * shortWrite + model.cost.input * 2 * longWrite) /
-      1_000_000;
-    cost.total += cacheWriteCost - cost.cacheWrite;
-    cost.cacheWrite = cacheWriteCost;
   }
 
   function handleMessageStart(event: ClaudeApiEvent): void {
