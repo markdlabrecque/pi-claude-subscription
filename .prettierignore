@@ -8,3 +8,5 @@ package-lock.json
 .claude/worktrees/
 # Generated planning artifacts, including bundled vendor code.
 docs/plans/*.html
+# Third-party fixture kept byte-for-byte as upstream wrote it.
+tests/fixtures/pi-manage-todo-list/
