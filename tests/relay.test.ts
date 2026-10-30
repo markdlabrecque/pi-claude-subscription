@@ -167,6 +167,74 @@ describe("upstream errors in a Pi turn", () => {
   });
 });
 
+describe("CLI failures in a Pi turn", () => {
+  async function failTurn(env: Record<string, string>) {
+    Object.assign(process.env, env);
+    upstream = await startFakeUpstream(["normal"]);
+    claude = installFakeClaude(upstream.url);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const stream = streamViaCli(model, {
+      messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
+    });
+    const events: any[] = [];
+    for await (const e of stream) events.push(e);
+    return { events, message: (await stream.result()) as any };
+  }
+  const keys = [
+    "FAKE_CLAUDE_RESULT_ERROR",
+    "FAKE_CLAUDE_PARTIAL_TEXT",
+    "FAKE_CLAUDE_PARTIAL_FAIL",
+  ];
+  afterEach(() => {
+    for (const key of keys) delete process.env[key];
+  });
+
+  it("an error result before any content ends as one typed error, not success-shaped prose", async () => {
+    const { events, message } = await failTurn({
+      FAKE_CLAUDE_RESULT_ERROR: "Something broke inside the CLI",
+    });
+
+    const terminal = events.filter(
+      (e) => e.type === "done" || e.type === "error",
+    );
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0].type).toBe("error");
+    expect(terminal[0].reason).toBe("error");
+    expect(terminal[0].error).toBe(message);
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toContain("Something broke inside the CLI");
+    expect(message.content).toEqual([]);
+  });
+
+  it("an error result after partial text keeps the text and usage and still reports the error", async () => {
+    const { events, message } = await failTurn({
+      FAKE_CLAUDE_RESULT_ERROR: "Stream died midway",
+      FAKE_CLAUDE_PARTIAL_TEXT: "Partial answer",
+    });
+
+    expect(events.at(-1).type).toBe("error");
+    expect(events.filter((e) => e.type === "done")).toHaveLength(0);
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toContain("Stream died midway");
+    expect(JSON.stringify(message.content)).toContain("Partial answer");
+    expect(JSON.stringify(message.content)).not.toContain("Stream died");
+    expect(message.usage.input).toBe(10);
+  });
+
+  it("a crash after partial text keeps the text and reports stderr as the error", async () => {
+    const { events, message } = await failTurn({
+      FAKE_CLAUDE_PARTIAL_FAIL: "segfault in libfoo",
+      FAKE_CLAUDE_PARTIAL_TEXT: "Half a sentence",
+    });
+
+    expect(events.at(-1).type).toBe("error");
+    expect(message.stopReason).toBe("error");
+    expect(message.errorMessage).toContain("segfault in libfoo");
+    expect(JSON.stringify(message.content)).toContain("Half a sentence");
+    expect(message.usage.input).toBe(10);
+  });
+});
+
 describe("thinking-only reply in a Pi turn", () => {
   it("ends with an error event instead of an empty done, even when the CLI asks for a second request", async () => {
     upstream = await startFakeUpstream(["thinking_only"]);

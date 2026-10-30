@@ -88,7 +88,8 @@ describe("context built by Pi's real normalizeContext", () => {
       });
     }
     expect(upstream.requests).toHaveLength(3);
-    expect(r.stopReason).toBe("stop");
+    expect(r.stopReason).toBe("error");
+    expect(r.errorMessage).toMatch(/failed 3 times in a row/);
   });
 
   it("underscore call with no matching Pi tool passes through unchanged", async () => {
