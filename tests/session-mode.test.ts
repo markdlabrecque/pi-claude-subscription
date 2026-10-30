@@ -126,7 +126,8 @@ describe("session mode", () => {
       const { result } = await lastTurn("resume", "{}\n");
 
       // lastTurn also asserts exactly one upstream request: no second attempt
-      expect(JSON.stringify(result.content)).toContain("No conversation found");
+      expect((result as any).stopReason).toBe("error");
+      expect((result as any).errorMessage).toContain("No conversation found");
     } finally {
       delete process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST;
     }

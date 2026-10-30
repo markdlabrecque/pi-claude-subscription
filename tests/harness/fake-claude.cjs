@@ -272,6 +272,33 @@ async function run(userMessage) {
     process.stderr.write(process.env.FAKE_CLAUDE_PARTIAL_FAIL + "\n");
     process.exit(1);
   }
+  if (process.env.FAKE_CLAUDE_RESULT_ERROR) {
+    // Report an error result, after partial text when FAKE_CLAUDE_PARTIAL_TEXT is set.
+    emit({ type: "system", subtype: "init", session_id: "fake-session" });
+    if (process.env.FAKE_CLAUDE_PARTIAL_TEXT) {
+      event({ type: "message_start", message: { usage: reply.usage } });
+      event({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      });
+      event({
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "text_delta",
+          text: process.env.FAKE_CLAUDE_PARTIAL_TEXT,
+        },
+      });
+    }
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: [process.env.FAKE_CLAUDE_RESULT_ERROR],
+    });
+    process.exit(1);
+  }
   if (!res.ok) {
     // The real CLI reports an API failure on stderr and exits non-zero.
     process.stderr.write(`API Error: ${res.status} ${JSON.stringify(reply)}\n`);

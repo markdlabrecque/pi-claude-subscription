@@ -127,8 +127,8 @@ describe("custom tool whose pi name contains mcp__ (#26)", () => {
     }
 
     expect(upstream.requests).toHaveLength(3);
-    expect(result.stopReason).toBe("stop");
-    expect(result.content[0].text).toMatch(
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(
       /totally_made_up_tool failed 3 times in a row/,
     );
   });

@@ -91,17 +91,30 @@ describe("attachments", () => {
     upstream = await startFakeUpstream();
     claude = installFakeClaude(upstream.url);
 
-    const result = await run([
-      { type: "text", text: "Summarise this" },
-      { type: "file", name: "report.bin" },
-    ]);
+    const stream = streamViaCli(model, {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Summarise this" },
+            { type: "file", name: "report.bin" },
+          ],
+          timestamp: 1,
+        },
+      ],
+    });
+    const events: any[] = [];
+    for await (const e of stream) events.push(e);
+    const result: any = await stream.result();
 
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining('"file" attachments are not supported'),
-      },
-    ]);
+    expect(events.map((e) => e.type)).toEqual(["error"]);
+    expect(events[0].reason).toBe("error");
+    expect(events[0].error).toBe(result);
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      '"file" attachments are not supported',
+    );
+    expect(result.content).toEqual([]);
     expect(upstream.requests).toHaveLength(0);
   });
 });
