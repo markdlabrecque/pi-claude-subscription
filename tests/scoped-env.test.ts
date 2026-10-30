@@ -171,7 +171,8 @@ describe("scoped provider environment", () => {
       env: { PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS: "400" },
     }).result();
 
-    expect(JSON.stringify(result.content)).toContain("timed out");
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("timed out");
   });
 });
 
