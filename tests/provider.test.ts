@@ -1364,7 +1364,8 @@ describe("streamViaCli", () => {
 
       expect(spawn).not.toHaveBeenCalled();
       expect(stream.end).toHaveBeenCalledTimes(1);
-      expect(stream._events.at(-1).type).toBe("done");
+      expect(stream._events.at(-1).type).toBe("error");
+      expect(stream._events.at(-1).reason).toBe("aborted");
     });
 
     it("does not spawn when aborted while the relay is starting", async () => {
@@ -1381,7 +1382,8 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(spawn).not.toHaveBeenCalled();
-      expect(stream._events.at(-1).type).toBe("done");
+      expect(stream._events.at(-1).type).toBe("error");
+      expect(stream._events.at(-1).reason).toBe("aborted");
     });
   });
 
