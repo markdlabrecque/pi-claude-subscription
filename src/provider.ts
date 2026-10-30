@@ -202,7 +202,8 @@ export function streamViaCli(
       // has started; later callbacks find the request already ended
       if (options?.signal) {
         abortHandler = () => {
-          seen.cancelled = true;
+          // A request that already ended keeps its own outcome
+          if (!ended) seen.cancelled = true;
           endWithAbort(bridge.getOutput());
           interruptQueue?.();
           if (proc) forceKillProcess(proc);
@@ -552,6 +553,9 @@ export function streamViaCli(
         output ?? createAssistantOutput(model),
         err?.message || "Unexpected error in streamViaCli",
       );
+      // Setup failed after the CLI started: nothing else will reap it
+      if (proc) forceKillProcess(proc);
+      closeLines?.();
     } finally {
       stopRequestTimer?.();
       clearTimeout(inactivityTimer);
