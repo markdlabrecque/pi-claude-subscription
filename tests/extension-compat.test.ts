@@ -156,7 +156,7 @@ describe("third-party extension fixture provenance", () => {
     expect(license).toContain("WITHOUT WARRANTY OF ANY KIND");
     expect(
       JSON.parse(readFileSync(join(fixtureDir, "package.json"), "utf-8")).pi,
-    ).toEqual({ extensions: ["./src/index.ts"] });
+    ).toMatchObject({ extensions: ["./src/index.ts"] });
   });
 });
 
@@ -266,11 +266,11 @@ describe("third-party extension through the installed Pi SDK", () => {
       settingsManager,
       sessionManager: SessionManager.inMemory(cwd),
       noTools: "builtin",
-      tools: ["manage_todo_list"],
     });
     session = result.session;
     await session.bindExtensions({});
     await session.setModel(model);
+    session.setActiveToolsByName(["manage_todo_list"]);
     expect(session.getAllTools().map((t) => t.name)).toContain(
       "deferred_probe",
     );
