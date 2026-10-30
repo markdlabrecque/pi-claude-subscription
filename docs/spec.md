@@ -27,7 +27,8 @@ The remaining target contract is tracked separately:
 - #40 owns effective system instructions, including normalized prompt sections and updates. #43 follows it for workspace guidance.
 - #42 owns current-request tool inventory, changing loadouts and activation semantics. Stable-inventory tests do not certify these behaviors.
 - #41 owns truthful failure/cancellation terminal states. Existing error/cancel cleanup regressions remain mandatory.
-- #14 retains broader extension compatibility. #50 owns provider-scoped environment, #51 request edits and observation hooks, and #52 third-party tool/attachment compatibility. The CLI path does not yet honor those hooks.
+- #14 retains broader extension compatibility. #50 owns provider-scoped environment and #52 third-party tool/attachment compatibility.
+- #51: the CLI path honors `onPayload` on the actual relayed Messages body (in-place edits and replacements are forwarded; malformed bodies, hook failures and cancellation forward nothing), awaits `onResponse` with the first forwarded upstream status and headers before the body is released, and awaits `onProviderStreamEvent` for each parsed top-level CLI NDJSON stream event before normalization. Provider stream data is the CLI's output, not a captured upstream SSE stream. Relay edits are not reflected in Pi's transcript or the CLI's session history; structural edits can break CLI assumptions. See [README provider hooks](../README.md#provider-hooks).
 - #34 owns cache-write pricing; #35 retains human account-side billing verification. Cache optimization is deferred until #39, #40 and #42 are complete.
 
 Support does not automatically extend to Pi-derived hosts or every 1.x release. These foundation checks do not certify complete Pi 1.x correctness or native-provider parity.
@@ -140,7 +141,7 @@ Core behaviour:
 - Running Claude Code's own tools or sub-agents through Pi. Pi stays the only harness.
 - Publishing to npm or the Pi package site.
 - Falling back to an Anthropic API key. Pi's own Anthropic provider covers that.
-- General Pi extension compatibility beyond what the CLI path itself affects. Extensions that edit the raw API request are not supported under this provider.
+- General Pi extension compatibility beyond what the CLI path itself affects. Raw request edits are honored only as the tested `onPayload` relay behavior; header mutation and native-provider parity are not supported.
 - Native Windows support.
 
 ## Further Notes
