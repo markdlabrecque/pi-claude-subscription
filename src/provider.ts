@@ -56,6 +56,7 @@ import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 import { getSessionMode } from "./session-mode.js";
 import { isDebugEnabled } from "./debug-log.js";
+import { resolveEnv } from "./env-flag.js";
 import {
   startRequestDiagnostics,
   type TerminalReason,
@@ -103,6 +104,9 @@ export function streamViaCli(
   options?: StreamViaCLiOptions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
+  // Settings, relay upstream and CLI environment all come from this one
+  // request-local view; process.env is never written
+  const env = resolveEnv(options?.env);
 
   /**
    * One CLI attempt. Resolves true when a resumed session was missing or
@@ -173,7 +177,7 @@ export function streamViaCli(
       // creates the session and later turns --resume it. Only an assistant
       // message indicates a prior turn, not the total transcript length
       // (pi includes system messages on the first turn).
-      const replay = forceReplay || getSessionMode() === "replay";
+      const replay = forceReplay || getSessionMode(env) === "replay";
       const resumeSessionId =
         !replay &&
         options?.sessionId &&
@@ -199,7 +203,7 @@ export function streamViaCli(
       if (isDebugEnabled()) diagnostics = startRequestDiagnostics();
 
       // One-request relay between the CLI and Anthropic
-      relay = await startRelay();
+      relay = await startRelay({ upstream: env.ANTHROPIC_BASE_URL });
 
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
@@ -218,6 +222,7 @@ export function streamViaCli(
           !replay && !resumeSessionId ? options?.sessionId : undefined,
         stateless: replay,
         baseUrl: relay.url,
+        env,
       });
       const getStderr = captureStderr(proc);
 
@@ -294,7 +299,7 @@ export function streamViaCli(
       }
 
       // Per-request timeout: kill the whole process tree, then end as usual
-      const requestTimeoutMs = getRequestTimeoutMs();
+      const requestTimeoutMs = getRequestTimeoutMs(env);
       const requestTimer = setTimeout(() => {
         seen.timedOut = true;
         forceKillProcess(proc!);
