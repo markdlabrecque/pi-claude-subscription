@@ -546,6 +546,28 @@ export function streamViaCli(
         return false;
       }
 
+      // Success needs a complete supported streamed message, not a clean
+      // exit or a nominal CLI result
+      const incomplete = bridge.getIncompleteReason();
+      if (incomplete) {
+        endWithError(output, `Claude CLI protocol error: ${incomplete}.`);
+        return false;
+      }
+      const replied = blocks.some((b: any) =>
+        b.type === "text"
+          ? !!b.text
+          : b.type === "thinking"
+            ? !!b.thinking || !!b.thinkingSignature
+            : b.type === "toolCall",
+      );
+      if (!replied) {
+        endWithError(
+          output,
+          "Claude returned an empty reply (no text, thinking or tool call).",
+        );
+        return false;
+      }
+
       endWithDone(output);
     } catch (err: any) {
       seen.threw = true;
