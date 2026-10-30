@@ -63,7 +63,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "check:style": "eslint . && prettier --check .",
+    "check-style": "eslint . && prettier --check .",
     "prepare": "husky"
   }
 }
