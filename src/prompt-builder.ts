@@ -9,7 +9,6 @@
  */
 
 import {
-  getCurrentSystemMessage,
   getCurrentSystemPrompt,
   normalizeContext,
   type Context,
@@ -493,30 +492,18 @@ function findFinalUserMessageIndex(messages: any[]): number {
  * message in the transcript replayed in order, so later content is appended
  * and sections are replaced or removed. Pi's text is sent exactly as given.
  * The provider's own guidance follows it as separate paragraphs.
- *
- * `cwd` is Pi's workspace from the stream options. It is only stated when
- * Pi's instructions carry no cwd section, so SDK embeddings (whose host
- * process cwd differs) still tell Claude where Pi's tools run. The CLI's own
- * private temp directory is never offered as the workspace.
  */
 export function buildSystemPrompt(
   context: { systemPrompt?: string; messages: any[] },
   replay = false,
-  cwd?: string,
 ): string {
   const parts: string[] = [];
 
-  const messages = normalizeContext(context as Context).messages;
-  const instructions = getCurrentSystemPrompt(messages);
+  const instructions = getCurrentSystemPrompt(
+    normalizeContext(context as Context).messages,
+  );
   if (instructions) {
     parts.push(instructions);
-  }
-
-  if (cwd && !getCurrentSystemMessage(messages)?.sections?.cwd) {
-    parts.push(
-      `Current working directory: ${cwd}\n` +
-        "Pi's tools run in this workspace and resolve relative paths against it.",
-    );
   }
 
   // When conversation history has tool results, instruct Claude to use them

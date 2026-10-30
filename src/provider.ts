@@ -215,7 +215,7 @@ export function streamViaCli(
         : resumeSessionId
           ? buildResumePrompt(context)
           : buildPrompt(context);
-      const systemPrompt = buildSystemPrompt(context, replay, options?.cwd);
+      const systemPrompt = buildSystemPrompt(context, replay);
 
       // Compute effort level from reasoning options
       const effort = mapThinkingEffort(
