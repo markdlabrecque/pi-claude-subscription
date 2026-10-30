@@ -218,13 +218,6 @@ export function streamViaCli(
         options.signal.addEventListener("abort", abortHandler, { once: true });
       }
 
-      // Reject attachments the CLI path cannot carry, before spawning anything
-      const unsupported = findUnsupportedAttachment(context.messages);
-      if (unsupported) {
-        endWithError(output, unsupported);
-        return false;
-      }
-
       // Stop a model stuck re-issuing the same failing tool call
       const repeated = findRepeatedToolFailure(context.messages);
       if (repeated) {
@@ -245,6 +238,16 @@ export function streamViaCli(
         context.messages.some((message) => message.role === "assistant")
           ? options.sessionId
           : undefined;
+
+      // Reject attachments this request cannot carry, before spawning anything
+      const unsupported = findUnsupportedAttachment(
+        context.messages,
+        !!resumeSessionId,
+      );
+      if (unsupported) {
+        endWithError(output, unsupported);
+        return false;
+      }
 
       // When resuming, only send the latest user turn
       const prompt = replay
