@@ -39,6 +39,22 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 - The #38 acceptance item "loads in pi from a packed tarball" is not met. It waits on a follow-up fix to the pi-ai import paths.
 - `tests/packed-tarball-load.test.ts` holds the check and is skipped until that fix lands.
 
+## Third-party tools and attachments (#52)
+
+- SDKs: `@earendil-works/pi-ai@1.4.0`, `@earendil-works/pi-coding-agent@1.4.0` and the `@earendil-works/pi-tui@1.4.0` copy they install (locked in `package-lock.json`; the fixture resolves the hoisted copy). Vitest 3.2.4. Fake CLI and fake upstream only; synthetic data only.
+- Fixture: `tests/fixtures/pi-manage-todo-list/`, tintinweb/pi-manage-todo-list at `2eb22d3b0c9dd981398d928c8edcc4afce202fa1`, manifest 0.4.0, MIT. `PROVENANCE.json` records each file's source URL and sha256. The fixture is excluded from lint and formatting so it stays byte-for-byte, and it is still typechecked with the project.
+- `tests/extension-compat.test.ts` checks the provenance record and runs the fixture's `manage_todo_list` read through `createAgentSession`, Pi's tool loop and the registered provider. It also runs a small #50 scoped-environment and #51 `onPayload` check.
+- `tests/attachments.test.ts` covers pass-through and typed rejection in replay, resume and resume-to-replay fallback. `tests/attachments-resume.test.ts` covers resume's tool-result path: the request carries the new tool result and does not resend an earlier image the resumed session already holds.
+- Commands: `npm ci`, then the commands under [Reproduce](#reproduce). The new tests run in the existing `npm test` and `npm run test:coverage` jobs; CI configuration is unchanged.
+- Local results for this change, Linux, run by a person on HEAD `6fc4aaf` on 2026-10-30:
+  - `npm test`: passed twice, 37 test files, 432/432 tests. This includes the focused `tests/extension-compat.test.ts`, `tests/attachments.test.ts`, `tests/attachments-resume.test.ts` and `tests/prompt-builder.test.ts`.
+  - `npm run typecheck` (`tsc --noEmit`, full project including `tests/fixtures/pi-manage-todo-list/`): passed, exit 0.
+  - `npm run lint`: passed, exit 0.
+  - `npm run format:check`: passed, exit 0; all matched files use Prettier code style.
+  - `npm run test:coverage`: run 3 times. Runs 2 and 3 passed 432/432 tests with coverage for all files at 98.18% statements, 91.5% branches, 99.16% functions and 98.18% lines, above the existing thresholds.
+  - Intermittent failure: coverage run 1 failed 3 of 432 tests in `tests/sdk-startup.test.ts`, `tests/pi-instructions.test.ts` and `tests/provider-hooks.test.ts`. In each, the fake upstream saw 2 requests instead of 1, or an extra `GET /`. It did not recur in the later runs and is not fixed by this change; it remains open.
+  - Remote CI: not run.
+
 ## Boundaries
 
-Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41 and broader extension compatibility #14 remain separate. Provider environment #50, honest request editing/observation #51 and third-party tools/attachments #52 are not certified by these tests. Pricing #34 and human billing verification #35 are unchanged. Cache optimization waits for #39, #40 and #42.
+Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41 and broader extension compatibility #14 remain separate. The #50/#51 checks in #52 consume their behaviour and do not repeat their test matrices. Pricing #34 and human billing verification #35 are unchanged. Cache optimization waits for #39, #40 and #42.

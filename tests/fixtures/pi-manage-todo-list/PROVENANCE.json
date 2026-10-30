@@ -1,0 +1,50 @@
+{
+  "name": "pi-manage-todo-list",
+  "repository": "https://github.com/tintinweb/pi-manage-todo-list",
+  "commit": "2eb22d3b0c9dd981398d928c8edcc4afce202fa1",
+  "version": "0.4.0",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 tintinweb",
+  "testedTool": "manage_todo_list",
+  "testedArguments": {
+    "operation": "read"
+  },
+  "note": "Byte-for-byte copies of the upstream files at the pinned commit. The commit is the fixture identity; no npm artifact or release tag was verified. Do not edit these files.",
+  "files": [
+    {
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/LICENSE",
+      "sha256": "e7d9d11c28cce34f09dc7d2b0a3a6609ccba5fbc8e926e6d1bfdf060930e9f05"
+    },
+    {
+      "path": "package.json",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/package.json",
+      "sha256": "6d200af7130614fbfe92bd092b87d75dcf31f828c3faf7bfcc6153070dfdea32"
+    },
+    {
+      "path": "src/index.ts",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/src/index.ts",
+      "sha256": "a7f554b282f5ce8f3e73c2cc9a900981d7055b35c74118aa3392387198c76e4b"
+    },
+    {
+      "path": "src/tool.ts",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/src/tool.ts",
+      "sha256": "7bb75ae9c15cd8c396a12907b46e49ed93521bcb54d5aebe7c4513263cc2d8de"
+    },
+    {
+      "path": "src/state-manager.ts",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/src/state-manager.ts",
+      "sha256": "59452ef1801db42beb95a2beb82341cd2f9687529d54f0b86c39bc733aa66833"
+    },
+    {
+      "path": "src/types.ts",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/src/types.ts",
+      "sha256": "10d47656dd9b6d0351a7c9bf3db9c5052779a8a17cab86f9a575aa7db13d411c"
+    },
+    {
+      "path": "src/ui/todo-widget.ts",
+      "url": "https://raw.githubusercontent.com/tintinweb/pi-manage-todo-list/2eb22d3b0c9dd981398d928c8edcc4afce202fa1/src/ui/todo-widget.ts",
+      "sha256": "702ab81ca6d32bb73db8726f3e7d65213143a92375a0cf4950e5638a7504854c"
+    }
+  ]
+}

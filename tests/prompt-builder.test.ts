@@ -927,6 +927,38 @@ describe("buildResumePrompt", () => {
     expect(result).toContain("Check status");
   });
 
+  it("sends only the tool result when Pi continues its tool loop", () => {
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Read my todos" },
+            { type: "image", data: "abc123", mimeType: "image/png" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "manage_todo_list",
+              arguments: { operation: "read" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolName: "manage_todo_list",
+          content: [{ type: "text", text: "No todos." }],
+        },
+      ],
+    };
+    expect(buildResumePrompt(context)).toBe(
+      "TOOL RESULT (manage_todo_list):\nNo todos.",
+    );
+  });
+
   it("returns empty string when no user message found", () => {
     const context = {
       messages: [{ role: "assistant", content: "Hello" }],

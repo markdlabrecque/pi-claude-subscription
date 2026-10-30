@@ -184,6 +184,15 @@ export function buildResumePrompt(context: {
     }
   }
 
+  // Pi continuing its tool loop: the session already holds the user turn,
+  // so send only what follows the last assistant turn (its tool results).
+  for (let i = messages.length - 1; i > finalUserIndex; i--) {
+    if (messages[i].role === "assistant") {
+      startIdx = i + 1;
+      break;
+    }
+  }
+
   for (let i = startIdx; i < messages.length; i++) {
     newMessages.push(messages[i]);
   }
@@ -415,23 +424,69 @@ export function buildPrompt(context: {
 }
 
 /**
- * Describe the first block in the final user message that cannot reach Claude
- * (anything but text, image, or a document with a source), or null if there is none. Rejecting it up
- * front keeps attachments from being dropped silently.
+ * Describe the first block the request would send that cannot reach Claude
+ * intact, or null if there is none. Rejecting it up front keeps attachments
+ * from being dropped or replaced by a placeholder silently.
+ *
+ * Images are carried only in the final user message; tool results carry text
+ * only; user messages may also carry documents with a source. A resumed CLI
+ * session already holds everything up to the last assistant turn, so only
+ * what follows it is checked.
  */
-export function findUnsupportedAttachment(messages: any[]): string | null {
-  const index = findFinalUserMessageIndex(messages);
-  const content = index >= 0 ? messages[index].content : undefined;
-  if (!Array.isArray(content)) return null;
-  const block = content.find(
-    (b) =>
-      b.type !== "text" &&
-      b.type !== "image" &&
-      !(b.type === "document" && b.source),
+export function findUnsupportedAttachment(
+  messages: any[],
+  resumed = false,
+): string | null {
+  const finalUserIndex = findFinalUserMessageIndex(messages);
+  let start = 0;
+  if (resumed) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") {
+        start = i + 1;
+        break;
+      }
+    }
+  }
+
+  for (let i = start; i < messages.length; i++) {
+    const { role, content } = messages[i];
+    if (!Array.isArray(content)) continue;
+    if (role === "user") {
+      for (const block of content) {
+        if (block.type === "text") continue;
+        if (block.type === "document" && block.source) continue;
+        if (block.type === "image") {
+          if (!isValidImage(block)) return MALFORMED_IMAGE;
+          if (i === finalUserIndex) continue;
+          return "an image in an earlier user message cannot be sent by pi-claude-subscription; only images in the latest user message reach Claude.";
+        }
+        return `"${block.type}" attachments are not supported by pi-claude-subscription; only text, images, and documents can be sent.`;
+      }
+    } else if (role === "toolResult") {
+      for (const block of content) {
+        if (block.type === "text") continue;
+        if (block.type === "image") {
+          if (!isValidImage(block)) return MALFORMED_IMAGE;
+          return `an image in the ${messages[i].toolName ?? "tool"} result cannot be sent by pi-claude-subscription; tool results can carry text only.`;
+        }
+        return `"${block.type}" attachments are not supported by pi-claude-subscription in tool results; only text can be sent.`;
+      }
+    }
+  }
+  return null;
+}
+
+const MALFORMED_IMAGE =
+  "an image attachment is malformed and cannot be sent by pi-claude-subscription; it needs non-empty base64 data and a media type.";
+
+/** Whether an image block has the data and media type Claude needs. */
+function isValidImage(block: any): boolean {
+  return (
+    typeof block.data === "string" &&
+    block.data !== "" &&
+    typeof block.mimeType === "string" &&
+    block.mimeType !== ""
   );
-  return block
-    ? `"${block.type}" attachments are not supported by pi-claude-subscription; only text, images, and documents can be sent.`
-    : null;
 }
 
 /** Identical failed tool calls in a row before the provider stops the turn. */
