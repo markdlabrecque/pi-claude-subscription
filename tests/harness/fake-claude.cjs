@@ -204,6 +204,24 @@ async function run(userMessage) {
       fake_cwd: process.cwd(),
       // The CLI arguments, so tests can check for session flags.
       fake_args: args,
+      // The environment the CLI was given: test markers and base URL by value,
+      // forbidden credential/provider variables by name only (never values).
+      fake_env: {
+        markers: Object.fromEntries(
+          Object.entries(process.env).filter(([k]) => k.startsWith("PI_TEST_")),
+        ),
+        baseUrl: process.env.ANTHROPIC_BASE_URL,
+        nonessentialTraffic:
+          process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,
+        disableClaudeMds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS,
+        disableAutoMemory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,
+        forbiddenPresent: Object.keys(process.env).filter(
+          (k) =>
+            k === "ANTHROPIC_API_KEY" ||
+            k === "ANTHROPIC_AUTH_TOKEN" ||
+            k.startsWith("CLAUDE_CODE_USE_"),
+        ),
+      },
       messages: [
         {
           ...userMessage.message,
