@@ -32,6 +32,13 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 5. `tests/registered-tools.test.ts` drives a normalized stable-inventory custom tool call/result round-trip through the registered callback. Pi/test-side execution produces the result used in the final streamed text. It checks schema-only MCP, exact names/arguments, synthetic host marker exclusion, fresh private cwd/config/schema cleanup, process cleanup and closed relay ports. Process-tree cleanup has been executed locally on Linux only; native Windows has the limitation noted above. A fake CLI attempts an extra generation on each request; only one reaches upstream.
 6. `tests/pi-real-shape.test.ts` now uses the registered callback and local SDK for the existing normalized name-resolution/unknown-name/bounded-repeat regressions. Existing break-early, isolation, error/cancel cleanup and relay guard regressions remain intact.
 
+## Packed-tarball load (#38)
+
+- Tested Pi version: 1.4.0 (`@earendil-works/pi-coding-agent@1.4.0`).
+- Result: FAILS. Loading the extension from the packed tarball with `discoverAndLoadExtensions` errors with `Cannot find module '.../pi-ai/dist/compat.js/providers/anthropic'`. Pi 1.4.0's extension loader does not resolve the `@earendil-works/pi-ai/providers/anthropic` and `@earendil-works/pi-ai/api/anthropic-messages` imports.
+- The #38 acceptance item "loads in pi from a packed tarball" is not met. It waits on a follow-up fix to the pi-ai import paths.
+- `tests/packed-tarball-load.test.ts` holds the check and is skipped until that fix lands.
+
 ## Boundaries
 
 Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41 and broader extension compatibility #14 remain separate. Provider environment #50, honest request editing/observation #51 and third-party tools/attachments #52 are not certified by these tests. Pricing #34 and human billing verification #35 are unchanged. Cache optimization waits for #39, #40 and #42.
