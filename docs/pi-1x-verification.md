@@ -39,6 +39,15 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 - The #38 acceptance item "loads in pi from a packed tarball" is not met. It waits on a follow-up fix to the pi-ai import paths.
 - `tests/packed-tarball-load.test.ts` holds the check and is skipped until that fix lands.
 
+## Third-party tools and attachments (#52)
+
+- SDKs: `@earendil-works/pi-ai@1.4.0`, `@earendil-works/pi-coding-agent@1.4.0` and the `@earendil-works/pi-tui` copy they install. Fake CLI and fake upstream only; synthetic data only.
+- Fixture: `tests/fixtures/pi-manage-todo-list/`, tintinweb/pi-manage-todo-list at `2eb22d3b0c9dd981398d928c8edcc4afce202fa1`, manifest 0.4.0, MIT. `PROVENANCE.json` records each file's source URL and sha256. The fixture is excluded from lint and formatting so it stays byte-for-byte, and it is still typechecked with the project.
+- `tests/extension-compat.test.ts` checks the provenance record and runs the fixture's `manage_todo_list` read through `createAgentSession`, Pi's tool loop and the registered provider. It also runs a small #50 scoped-environment and #51 `onPayload` check.
+- `tests/attachments.test.ts` covers pass-through and typed rejection in replay, resume and resume-to-replay fallback.
+- Commands: `npm ci`, then the commands under [Reproduce](#reproduce). The new tests run in the existing `npm test` and `npm run test:coverage` jobs; CI configuration is unchanged.
+- Local result for this change: `npm test` only. Lint, format, typecheck-only and coverage runs, and remote CI results, are not part of this record.
+
 ## Boundaries
 
-Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41 and broader extension compatibility #14 remain separate. Provider environment #50, honest request editing/observation #51 and third-party tools/attachments #52 are not certified by these tests. Pricing #34 and human billing verification #35 are unchanged. Cache optimization waits for #39, #40 and #42.
+Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41 and broader extension compatibility #14 remain separate. The #50/#51 checks in #52 consume their behaviour and do not repeat their test matrices. Pricing #34 and human billing verification #35 are unchanged. Cache optimization waits for #39, #40 and #42.
