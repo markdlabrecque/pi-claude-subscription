@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Real-shaped calculateCost: prices each bucket from model.cost (USD per million tokens).
+// Like the SDK, usage.cacheWrite1h is priced at 2x input and the rest at cacheWrite.
 vi.mock("@earendil-works/pi-ai", () => ({
   calculateCost: vi.fn((model: any, usage: any) => {
     usage.cost = {
       input: (model.cost.input / 1e6) * usage.input,
       output: (model.cost.output / 1e6) * usage.output,
       cacheRead: (model.cost.cacheRead / 1e6) * usage.cacheRead,
-      cacheWrite: (model.cost.cacheWrite / 1e6) * usage.cacheWrite,
+      cacheWrite:
+        (model.cost.cacheWrite *
+          (usage.cacheWrite - (usage.cacheWrite1h ?? 0)) +
+          model.cost.input * 2 * (usage.cacheWrite1h ?? 0)) /
+        1e6,
       total: 0,
     };
     usage.cost.total =
@@ -58,6 +63,7 @@ describe("cache-write cost uses reported cache tier", () => {
     });
     const { usage } = bridge.getOutput();
     expect(usage.cacheWrite).toBe(3000);
+    expect(usage.cacheWrite1h).toBe(2000);
     expect(usage.totalTokens).toBe(3100);
     expect(usage.cost.cacheWrite).toBeCloseTo(0.00375 + 0.012, 10);
     expect(usage.cost.total).toBeCloseTo(0.0003 + 0.00375 + 0.012, 10);
