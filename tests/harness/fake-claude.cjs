@@ -175,6 +175,8 @@ async function run(userMessage) {
     });
     process.exit(1);
   }
+  // FAKE_CLAUDE_EMPTY_EXIT=1: exit 0 silently, with no events and no request.
+  if (process.env.FAKE_CLAUDE_EMPTY_EXIT) process.exit(0);
   recordProcessTree();
   const context = [
     claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
@@ -233,6 +235,23 @@ async function run(userMessage) {
   if (process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST) {
     // Fail with this stderr text once the request is sent (a mid-turn crash).
     process.stderr.write(process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST + "\n");
+    process.exit(1);
+  }
+  if (process.env.FAKE_CLAUDE_PARTIAL_FAIL) {
+    // Stream some text, then crash with this stderr text (partial output).
+    emit({ type: "system", subtype: "init", session_id: "fake-session" });
+    event({ type: "message_start", message: { usage: reply.usage } });
+    event({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    });
+    event({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: process.env.FAKE_CLAUDE_PARTIAL_TEXT },
+    });
+    process.stderr.write(process.env.FAKE_CLAUDE_PARTIAL_FAIL + "\n");
     process.exit(1);
   }
   if (!res.ok) {
