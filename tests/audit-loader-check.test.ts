@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -20,7 +21,7 @@ const secret = "SYNTHETIC-LOADER-RAW-ERROR-ACCOUNT-PATH";
 let sandbox: string;
 let pkg: string;
 beforeEach(() => {
-  sandbox = mkdtempSync(join(tmpdir(), "audit-loader-"));
+  sandbox = realpathSync(mkdtempSync(join(tmpdir(), "audit-loader-")));
   pkg = join(sandbox, "extension");
   mkdirSync(pkg);
 });

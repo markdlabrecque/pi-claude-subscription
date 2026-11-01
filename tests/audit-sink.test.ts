@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -40,8 +41,9 @@ const lines = () =>
     .map((s) => JSON.parse(s));
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "audit-extension-"));
-  outside = mkdtempSync(join(tmpdir(), "audit-outside-"));
+  // macOS tmpdir can use /var while the sink verifies /private/var.
+  root = realpathSync(mkdtempSync(join(tmpdir(), "audit-extension-")));
+  outside = realpathSync(mkdtempSync(join(tmpdir(), "audit-outside-")));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
