@@ -5,7 +5,7 @@
 - Minimum Pi release: 1.4.0.
 - Exact development/test SDKs: `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`.
 - Local platform: Linux. Node 22.19.0 and 24.20.0.
-- CI configuration: Node 22.19.0, Linux/macOS/Windows, the same locked SDK pair. Remote results are pending execution, not part of the local evidence. Source review identified a native-Windows process-tree cleanup limitation: runtime group killing is POSIX-only, and killing a Windows `.cmd` launcher does not reap its descendants. The matrix and cleanup assertions remain intact. Native Windows is unsupported; use WSL. This is separate from SDK compatibility, and this change does not claim that the Windows job passes.
+- CI configuration: Node 22.19.0, Linux/macOS, the same locked SDK pair. Native Windows is unsupported and excluded from CI by maintainer decision; use WSL. Runtime process-group cleanup is POSIX-only, and killing a Windows `.cmd` launcher does not reap its descendants. Linux/macOS cleanup assertions remain intact. See the CI execution evidence below.
 - CLI contract inspection: Claude Code 2.1.312 `--help` lists `--effort low|medium|high|xhigh|max`. Automated execution uses the fake CLI, not a subscription or live model. This does not verify reasoning quality or all real CLI releases.
 
 ## Reproduce
@@ -34,11 +34,11 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 
 ## CI execution gate (#46)
 
-The previous workflow targeted only `main`, so pushes and pull requests targeting `develop` did not run CI. The workflow now targets both branches and also supports `workflow_dispatch`. The Linux/macOS/Windows matrix, Node 22.19.0 runtime, installed-SDK checks, coverage thresholds and cleanup assertions are unchanged.
+The previous workflow targeted only `main`, so pushes and pull requests targeting `develop` did not run CI. The workflow now targets both branches and also supports `workflow_dispatch`. CI covers the supported Linux/macOS platforms. Node 22.19.0, installed-SDK checks, coverage thresholds and cleanup assertions are unchanged.
 
 Local re-verification of the CI-trigger change on Linux used Node 22.19.0 and the locked Pi SDK pair at 1.4.0. `npm run test:coverage` passed 498 tests in 43 files, with the separate #38 packed-tarball test still skipped. Coverage was 98.19% statements/lines, 91.79% branches and 99.2% functions. `npm run typecheck` and `npm run check-style` passed. YAML parsing and explicit trigger, matrix and runtime assertions also passed. Only fake CLI/upstream requests were used.
 
-This is not remote CI evidence. Keep #46 open until the workflow runs against the change and the required platform results are reviewed. The native-Windows process-tree limitation above remains unresolved; no job or assertion was disabled to hide it.
+[CI run 41283185003](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41283185003) on commit `b183e03` passed lint, typecheck and the Linux/macOS test jobs; the Windows test job failed. The maintainer then explicitly dropped native Windows support and its CI job. This supersedes #46's earlier three-platform acceptance requirement; Windows is not treated as passing or repaired. Linux/macOS tests and assertions are unchanged. Keep #46 open pending the follow-up run with the supported-platform matrix.
 
 ## Packed-tarball load (#38)
 
