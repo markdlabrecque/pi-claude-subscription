@@ -561,12 +561,12 @@ export function buildSystemPrompt(
     parts.push(instructions);
   }
 
-  // When conversation history has tool results, instruct Claude to use them
-  // instead of trying to re-call tools (which may not be available).
-  if (context.messages?.some((m: any) => m.role === "toolResult")) {
+  // Replay must carry the same guidance before and after the first tool
+  // result. Adding it only once a result exists invalidates the cache prefix.
+  if (replay || context.messages?.some((m: any) => m.role === "toolResult")) {
     parts.push(
-      "IMPORTANT: The conversation history below contains tool results from previously executed tools. " +
-        "Use these results to answer the user's question. Do NOT attempt to re-call tools that already have results.",
+      "IMPORTANT: If the conversation history below contains tool results from previously executed tools, " +
+        "use these results to answer the user's question. Do NOT attempt to re-call tools that already have results.",
     );
   }
 
