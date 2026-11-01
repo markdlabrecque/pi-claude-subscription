@@ -1,0 +1,4 @@
+# Nested ignore rules also apply beneath the package's explicit src/ allowlist.
+**/*.jsonl
+**/.append-lock/
+.audit/

@@ -1,6 +1,6 @@
 # pi-claude-subscription
 
-A [Pi](https://github.com/earendil-works/pi) extension that routes LLM calls through the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) as a subprocess. Use your Claude Pro/Max subscription as the LLM backend — no API key, no separate billing.
+A [Pi](https://github.com/earendil-works/pi) extension that routes LLM calls through the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) as a subprocess, using your Claude Code subscription login rather than an API key. Account limits and billing rules still apply; the optional API-key path is billed separately.
 
 This is a fork of [rchern/pi-claude-cli](https://github.com/rchern/pi-claude-cli), renamed so it installs beside the original. Credit for the original design and implementation goes to its author. The MIT licence is kept (see [LICENSE](LICENSE)).
 
@@ -14,19 +14,21 @@ This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` an
 
 The minimum supported Pi version is **1.4.0**. The exact tested SDK pair is `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`, pinned in development dependencies and the lockfile. Mandatory local-SDK tests cover startup model selection, registered text/tool requests, thinking mappings, API-key fallback, isolation and the one-request guard. CI runs the same suite on Node 22.19.0 across Linux and macOS. Local verification ran on Linux with Node 22.19.0 and 24.20.0; remote CI results are not implied. See [migration verification](docs/pi-1x-verification.md).
 
-Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. Known follow-ups are listed below.
+Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. In particular, the packed-package loader test fails on Pi 1.4.0 and remains skipped. See [current status and adoption cautions](docs/roadmap.md).
 
 ## Requirements
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude auth login`; `claude` on PATH)
-- A Claude Pro or Max subscription
+- A subscription seat with Claude Code access, authenticated through the CLI. Team account billing-pool verification is not established by the automated tests.
 - [Pi 1.4.0 or later in the 1.x family](https://github.com/earendil-works/pi). Only SDK 1.4.0 is verified here; later versions require their own checks. Compatibility with GSD or other Pi-derived hosts is not implied.
 - Node.js 22.19.0 or later.
 - macOS or Linux. On Windows, use WSL.
 
 ## Setup
 
-Install the supported host first, then install this checkout for the migrated code:
+The [v0.4.0 GitHub release](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v0.4.0) contains the Pi 1.x migration and cache fixes. It was not published to npm because registry authentication was missing. Git distribution does not depend on npm publication, but it does not bypass the [known Pi 1.4.0 loader failure](docs/pi-1x-verification.md#packed-tarball-load-38). Confirm the provider loads in your actual Pi installation before relying on it.
+
+For local checkout development:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent@1.4.0
@@ -34,7 +36,7 @@ npm ci
 pi install .
 ```
 
-Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings. The published `pi-claude-subscription@0.3.1` predates this migration; do not use it to verify the new SDK contract. No global Pi installation, real CLI or login is needed to run the tests.
+Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings; it is not proof that the loader succeeds. The earlier 0.3.1 source version predates the migration and is not evidence of an npm publication. No global Pi installation, real CLI or login is needed to run the tests.
 
 Then select a model via `/model` in the interactive UI. Haiku, Sonnet, Opus and Fable are listed under the `pi-claude-subscription` provider.
 
@@ -49,18 +51,18 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
 - Session mode: `PI_CLAUDE_SUBSCRIPTION_SESSION_MODE=replay|resume`, default `replay`. `replay` sends the whole history, including tool calls and results, as one text block per message and leaves no CLI session state, so a session can finish in a fresh container. `resume` sends only the new turn and uses `--resume` on the CLI session files on disk. If the resumed session is missing or unreadable (the CLI exits with `No conversation found with session ID`), that turn falls back to `replay`, which leaves no session behind, so each later turn falls back again. It is read on every request.
 - Environment precedence: a caller's provider-scoped `env` option overrides the process environment for that request only; empty scoped values fall through to the process value, as in pi-ai. It applies to the session mode, request timeout, API-key fallback flag and key, the relay's upstream (`ANTHROPIC_BASE_URL`) and the variables the CLI inherits. `process.env` is never changed. The CLI is still stripped of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_USE_*`, and the isolation variables, nonessential-traffic suppression and its loopback relay URL are always set last, so scoped values cannot override them. Supplying a key without `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK` does not enable the fallback. The debug flag stays process-wide. The relay is Node's plain HTTP(S) client: proxy and custom TLS variables reach the CLI but are not applied to the relay's upstream connection, and only plain loopback upstreams are tested.
-- Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request; one `request diagnostics` JSON line per CLI request with a request id, the reason it ended, the extension, Pi and Claude CLI versions, whether message start, message stop and the CLI result were seen, the exit code or signal, cancellation and timeout, and the relay's upstream and rejected counts; and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive.
+- Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request; one `request diagnostics` JSON line per CLI request with a request id, the reason it ended, the extension, Pi and Claude CLI versions, whether message start, message stop and the CLI result were seen, the exit code or signal, cancellation and timeout, and the relay's upstream and rejected counts; and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive. This writes to stderr, not a persistent extension-local audit ledger, and does not cover every early failure or API-key request. A separate [opt-in local audit mode](docs/local-audit.md) is implemented on this feature branch, not in the v0.4.0 tag. Set `PI_CLAUDE_SUBSCRIPTION_AUDIT=1` to write safe error and successful-usage metadata to `<extension-root>/.audit/YYYY-MM-DD.jsonl`; it stays off by default and does not enable raw debug logging.
 
 ## Known limits
 
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
 - Images (Pi's native `image` blocks) in the latest user message are passed through byte-identically. Documents in any user turn are passed through as provider-wire `document` blocks; Pi 1.x has no native document block, so this is wire behavior, not SDK support. Earlier documents are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit.
 - Anything else a request would have to send is rejected with a typed error before any CLI or upstream request, rather than dropped or replaced by a placeholder: images in earlier user messages or in tool results (including custom-tool results), malformed images (missing or empty base64 data or media type), and any other attachment type. In `resume` mode only what follows the last assistant turn is checked, since the resumed CLI session already holds the rest; when resume falls back to `replay`, the whole history is checked again.
-- Effective normalized system-instruction forwarding remains [#40](https://github.com/markdlabrecque/pi-claude-subscription/issues/40). Workspace guidance remains [#43](https://github.com/markdlabrecque/pi-claude-subscription/issues/43).
-- Current-request tool inventory and activation remain [#42](https://github.com/markdlabrecque/pi-claude-subscription/issues/42). The migration tests use a stable offered tool set, not changing or deferred inventories.
-- Truthful terminal failure/cancellation statuses remain [#41](https://github.com/markdlabrecque/pi-claude-subscription/issues/41). Existing cleanup tests do not certify all terminal statuses.
+- The packed-package loader check fails on Pi 1.4.0 and remains skipped. Green provider tests do not certify installation through Pi's extension loader.
+- The relay forwards at most one Messages request per provider invocation. CLI retries and output-limit continuations are rejected; Pi's own retry policy can start another invocation. A dropped upstream stream can wait until timeout. See [ADR-0002](docs/adr/0002-one-request-cap-and-cli-retries.md).
 - Extension compatibility is limited to the cases in [Extension compatibility](#extension-compatibility) ([#14](https://github.com/markdlabrecque/pi-claude-subscription/issues/14), [#52](https://github.com/markdlabrecque/pi-claude-subscription/issues/52)). Native-provider parity is not promised; see [Provider hooks](#provider-hooks) for what the CLI path does honor.
-- Cache-write pricing remains [#34](https://github.com/markdlabrecque/pi-claude-subscription/issues/34), and account-side billing verification remains [#35](https://github.com/markdlabrecque/pi-claude-subscription/issues/35). Cache optimization is deferred until [#39](https://github.com/markdlabrecque/pi-claude-subscription/issues/39), #40 and #42 are complete.
+- Cache-write accounting and both known replay-prefix regressions are fixed in v0.4.0. Real instruction or tool-loadout changes can still invalidate the cache. Token costs are API-equivalent estimates, not subscription charges or quota measurements.
+- Account-side billing verification was not performed. [#35](https://github.com/markdlabrecque/pi-claude-subscription/issues/35) was closed because the maintainer disabled extra spending, not because a usage-pool measurement passed. Keep API-key fallback disabled if separate API billing is unwanted. See the [reconciled issue status](docs/roadmap.md) for completed work and untracked follow-ups.
 - Native Windows is not supported. On Windows, use WSL.
 
 ## Extension compatibility

@@ -1,6 +1,9 @@
 node_modules/
 dist/
 coverage/
+.audit/
+**/????-??-??.jsonl
+.append-lock/
 *.tsbuildinfo
 .claude/settings.local.json
 /.claude/worktrees/

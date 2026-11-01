@@ -44,6 +44,7 @@ import {
   forceKillProcess,
   registerProcess,
   getRequestTimeoutMs,
+  observeProcessCleanup,
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
 import { createAssistantOutput, createEventBridge } from "./event-bridge.js";
@@ -64,6 +65,13 @@ import {
   startRequestDiagnostics,
   type TerminalReason,
 } from "./request-diagnostics.js";
+import {
+  startAuditRequest,
+  unknownUsage,
+  unknownCleanup,
+  estimateAuditCost,
+  observeAuditUsage,
+} from "./audit-request.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
 
@@ -77,6 +85,8 @@ const SESSION_NOT_FOUND = /No conversation found with session ID/;
 type StreamViaCLiOptions = SimpleStreamOptions & {
   cwd?: string;
   mcpConfigPath?: string;
+  /** Entry-point recorder, begun before tool-inventory preflight. */
+  auditRequest?: ReturnType<typeof startAuditRequest>;
 };
 
 /**
@@ -110,6 +120,15 @@ export function streamViaCli(
   // Settings, relay upstream and CLI environment all come from this one
   // request-local view; process.env is never written
   const env = resolveEnv(options?.env);
+  const audit = options?.auditRequest ?? startAuditRequest(model, env, "cli");
+  const usage = unknownUsage();
+  const cleanup = unknownCleanup();
+  const relayCounts = { upstreamCount: 0, rejectedCount: 0 };
+  const attempts: { mode: string; reason: string }[] = [];
+  let auditReason = "error";
+  let auditOutcome = "error";
+  let auditHook: string | undefined;
+  let auditHttp: UpstreamFailure | undefined;
 
   // One terminal result per request, across both attempts: the first wins
   let ended = false;
@@ -136,6 +155,8 @@ export function streamViaCli(
   const endWithAbort = (output: AssistantMessage) => {
     if (ended) return;
     ended = true;
+    auditOutcome = "cancelled";
+    auditReason = "cancelled";
     stream.push({
       type: "error",
       reason: "aborted",
@@ -152,6 +173,8 @@ export function streamViaCli(
   const endWithDone = (output: AssistantMessage) => {
     if (ended) return;
     ended = true;
+    auditOutcome = "success";
+    auditReason = output.stopReason;
     stream.push({
       type: "done",
       // The bridge only ever sets these three
@@ -194,6 +217,8 @@ export function streamViaCli(
       resumeLost: false,
       threw: false,
     };
+    const attemptMode = forceReplay ? "replay" : getSessionMode(env);
+    auditReason = "error";
 
     try {
       const bridge = createEventBridge(stream, model, getPiToolNames(context));
@@ -222,6 +247,7 @@ export function streamViaCli(
       // Stop a model stuck re-issuing the same failing tool call
       const repeated = findRepeatedToolFailure(context.messages);
       if (repeated) {
+        auditReason = "repeated_tool_rejected";
         endWithError(output, repeated);
         return false;
       }
@@ -246,6 +272,7 @@ export function streamViaCli(
         !!resumeSessionId,
       );
       if (unsupported) {
+        auditReason = "attachment_rejected";
         endWithError(output, unsupported);
         return false;
       }
@@ -270,15 +297,31 @@ export function streamViaCli(
       // One-request relay between the CLI and Anthropic. Pi's request and
       // response hooks run there, on the actual request and response.
       const { onPayload, onResponse } = options ?? {};
+      auditReason = "relay_error";
       relay = await startRelay({
         upstream: env.ANTHROPIC_BASE_URL,
-        onPayload: (payload) => {
+        onPayload: async (payload) => {
           normalizeCliEnvironment(payload);
-          return onPayload?.(payload, model);
+          try {
+            return await onPayload?.(payload, model);
+          } catch (error) {
+            auditHook = "onPayload";
+            throw error;
+          }
         },
-        onResponse: onResponse && ((response) => onResponse(response, model)),
+        onResponse:
+          onResponse &&
+          (async (response) => {
+            try {
+              await onResponse(response, model);
+            } catch (error) {
+              auditHook = "onResponse";
+              throw error;
+            }
+          }),
       });
 
+      if (!ended) auditReason = "error";
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
         endWithAbort(output);
@@ -286,6 +329,7 @@ export function streamViaCli(
       }
 
       // Spawn subprocess
+      auditReason = "spawn_error";
       proc = spawnClaude(model.id, systemPrompt || undefined, {
         signal: options?.signal,
         effort,
@@ -297,6 +341,7 @@ export function streamViaCli(
         baseUrl: relay.url,
         env,
       });
+      auditReason = "error";
       const getStderr = captureStderr(proc);
 
       // Register in global process registry for teardown cleanup
@@ -320,6 +365,7 @@ export function streamViaCli(
         queue = queue
           .then(() => (seen.cancelled || ended ? undefined : handle()))
           .catch((err) => {
+            auditHook = "onProviderStreamEvent";
             observerFailure ??= `Provider stream event hook failed: ${err instanceof Error ? err.message : String(err)}`;
             forceKillProcess(proc!);
             endStreamWithError(observerFailure);
@@ -334,6 +380,19 @@ export function streamViaCli(
        */
       function endStreamWithError(errMsg: string) {
         if (broken) return;
+        if (!ended) {
+          auditReason = auditHook
+            ? "hook_error"
+            : seen.timedOut
+              ? "timeout"
+              : seen.inactive
+                ? "inactivity_timeout"
+                : relay?.failure || notLoggedIn
+                  ? "http_error"
+                  : seen.resultError
+                    ? "result_error"
+                    : auditReason;
+        }
         // A Pi hook failed or the relay refused the request: say so, as an error
         const refused = relay?.requestFailure ?? observerFailure;
         if (refused) {
@@ -387,6 +446,7 @@ export function streamViaCli(
       // Handle process error -- use endStreamWithError for guard
       proc.on("error", (err: Error) => {
         if (broken) return; // Break-early killed the process intentionally
+        if (!ended) auditReason = "spawn_error";
         const stderr = getStderr();
         endStreamWithError(stderr || err.message);
       });
@@ -409,6 +469,7 @@ export function streamViaCli(
           return;
         }
         if (code !== 0) {
+          if (!ended) auditReason = "cli_exit";
           const stderr = getStderr();
           if (resumeLost(stderr)) return; // The caller falls back to replay
           const message = stderr
@@ -452,6 +513,8 @@ export function streamViaCli(
           // Only forward top-level events to pi's event bridge.
           // Sub-agent events (parent_tool_use_id !== null) are internal to the CLI.
           const isTopLevel = !(msg as any).parent_tool_use_id;
+          // Usage was received even if the caller's observer rejects the event.
+          if (isTopLevel && audit.enabled) observeAuditUsage(usage, msg.event);
           // Pi's observer sees the parsed CLI event before the bridge does
           if (isTopLevel && observe) {
             await observe(msg.event, model);
@@ -524,6 +587,7 @@ export function streamViaCli(
         await drained();
         if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr())) {
           seen.resumeLost = true;
+          auditReason = "resume_missing";
           return true;
         }
       }
@@ -546,6 +610,7 @@ export function streamViaCli(
             b.type === "thinking" && !b.thinking && !b.thinkingSignature,
         );
       if (onlyEmptyThinking) {
+        if (!ended) auditReason = "protocol_error";
         endWithError(
           { ...output, content: [] },
           "Claude returned an empty reply (thinking only, no text or tool call).",
@@ -557,6 +622,7 @@ export function streamViaCli(
       // exit or a nominal CLI result
       const incomplete = bridge.getIncompleteReason();
       if (incomplete) {
+        if (!ended) auditReason = "protocol_error";
         endWithError(output, `Claude CLI protocol error: ${incomplete}.`);
         return false;
       }
@@ -568,6 +634,7 @@ export function streamViaCli(
             : b.type === "toolCall",
       );
       if (!replied) {
+        if (!ended) auditReason = "protocol_error";
         endWithError(
           output,
           "Claude returned an empty reply (no text, thinking or tool call).",
@@ -592,7 +659,29 @@ export function streamViaCli(
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);
       }
-      await relay?.stop();
+      if (audit.enabled && (relay || proc)) cleanup.attempted = true;
+      try {
+        await relay?.stop();
+        if (audit.enabled && relay && cleanup.relay !== "failed")
+          cleanup.relay = "confirmed";
+      } catch {
+        if (audit.enabled && relay) cleanup.relay = "failed";
+      }
+      if (audit.enabled) {
+        relayCounts.upstreamCount += relay?.upstreamCount ?? 0;
+        relayCounts.rejectedCount += relay?.rejectedCount ?? 0;
+        auditHttp =
+          relay?.failure ?? (notLoggedIn ? { status: 401 } : auditHttp);
+        attempts.push({ mode: attemptMode, reason: auditReason });
+        if (proc) {
+          const observed = await observeProcessCleanup(proc);
+          for (const key of ["process", "sandbox"] as const) {
+            // A later replay must not certify an earlier failed/unknown cleanup.
+            if (attempts.length === 1 || cleanup[key] === "confirmed")
+              cleanup[key] = observed[key];
+          }
+        }
+      }
       // Written once the CLI exits, without holding up the stream or a retry
       if (diagnostics) {
         const ended = relay;
@@ -635,7 +724,26 @@ export function streamViaCli(
       if (await attempt(false)) await attempt(true);
     } finally {
       // The config file is made per request, and both attempts have used it
-      if (options?.mcpConfigPath) removeMcpConfig(options.mcpConfigPath);
+      if (options?.mcpConfigPath) {
+        if (audit.enabled) cleanup.attempted = true;
+        try {
+          removeMcpConfig(options.mcpConfigPath);
+          cleanup.mcp = "confirmed";
+        } catch {
+          cleanup.mcp = "failed";
+        }
+      }
+      await audit.finish({
+        outcome: auditOutcome,
+        reason: auditReason,
+        usage,
+        estimatedCost: estimateAuditCost(model, usage),
+        relay: relayCounts,
+        cleanup,
+        attempts,
+        ...(auditHook && { hook: auditHook }),
+        ...(auditHttp && { http: auditHttp }),
+      });
     }
   })();
 
