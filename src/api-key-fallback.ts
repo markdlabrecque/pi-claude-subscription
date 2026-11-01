@@ -60,6 +60,22 @@ export function streamViaAnthropic(
       ...options,
       apiKey: env.ANTHROPIC_API_KEY,
       ...(audit.enabled && {
+        // The SDK throws non-success responses before onResponse. Observe at
+        // the request-local transport boundary without consuming the body or
+        // changing which responses the caller's hooks receive.
+        fetch: async (...args: Parameters<typeof fetch>) => {
+          http = undefined;
+          const response = await (options?.fetch ?? globalThis.fetch)(...args);
+          if (response.status >= 400) {
+            const retryAfter = response.headers.get("retry-after");
+            http = {
+              status: response.status,
+              ...(typeof retryAfter === "string" &&
+                /^\d{1,9}$/.test(retryAfter) && { retryAfter }),
+            };
+          }
+          return response;
+        },
         onPayload:
           options?.onPayload &&
           (async (payload, selectedModel) => {
@@ -71,14 +87,6 @@ export function streamViaAnthropic(
             }
           }),
         onResponse: async (response, selectedModel) => {
-          if (response.status >= 400) {
-            const retryAfter = response.headers["retry-after"];
-            http = {
-              status: response.status,
-              ...(typeof retryAfter === "string" &&
-                /^\d{1,9}$/.test(retryAfter) && { retryAfter }),
-            };
-          }
           try {
             await options?.onResponse?.(response, selectedModel);
           } catch (error) {

@@ -513,6 +513,8 @@ export function streamViaCli(
           // Only forward top-level events to pi's event bridge.
           // Sub-agent events (parent_tool_use_id !== null) are internal to the CLI.
           const isTopLevel = !(msg as any).parent_tool_use_id;
+          // Usage was received even if the caller's observer rejects the event.
+          if (isTopLevel && audit.enabled) observeAuditUsage(usage, msg.event);
           // Pi's observer sees the parsed CLI event before the bridge does
           if (isTopLevel && observe) {
             await observe(msg.event, model);
@@ -521,7 +523,6 @@ export function streamViaCli(
           if (isTopLevel) {
             if (msg.event.type === "message_start") seen.messageStart = true;
             if (msg.event.type === "message_stop") seen.messageStop = true;
-            if (audit.enabled) observeAuditUsage(usage, msg.event);
             bridge.handleEvent(msg.event);
           }
 

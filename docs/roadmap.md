@@ -1,6 +1,6 @@
 # Roadmap and adoption cautions
 
-Reconciled on 2026-11-01 against `main` at `8f8b45b`, the v0.4.0 GitHub release, all 45 GitHub issues and the repository's implementation and verification notes. There are **no open issues or pull requests** at this snapshot. That means there is no currently tracked implementation backlog, not that every acceptance check passed.
+Reconciled on 2026-11-01 against `main` at `8f8b45b`, the v0.4.0 GitHub release, all 45 GitHub issues and the repository's implementation and verification notes. That historical snapshot had no open issues or pull requests, not proof that every acceptance check passed. The subsequent audit feature and its review defects are tracked in [#74](https://github.com/markdlabrecque/pi-claude-subscription/issues/74).
 
 For daily use, the first gate is whether the extension loads in the actual Pi host. The registered-provider tests pass, but the packaged extension's Pi 1.4.0 loader check is a documented failure and remains skipped. Until that is resolved or the intended installation is independently verified, this is not a certified install-and-forget replacement for all work.
 
@@ -61,9 +61,9 @@ The feature is implemented on `feat/local-audit`, not released as v0.4.0. `PI_CL
 
 The packaged `src/audit-loader-check.mjs` records an explicit SDK load check in the same directory without sending a model request. The known import defect remains unfixed. Loading cannot be automatically audited by extension code that never loads; use this separate check and inspect host diagnostics for actual Pi startup failures.
 
-Daily files have private permissions, seven-day retention and a 5 MiB daily limit. Write/lock failures warn visibly without replacing the provider result. Hard-killed requests can remain incomplete, and observed process close does not certify every descendant. The full operational limits, commands and verification results are in [local audit logging](local-audit.md). A local verification manifest records candidate fingerprints and check outcomes alongside the ledger.
+Daily files have private permissions, seven-day retention and a 5 MiB daily limit. Write/lock failures warn visibly without replacing the provider result. Hard-killed requests can remain incomplete, and observed process close does not certify every descendant. The full operational limits, commands and verification results are in [local audit logging](local-audit.md). A local verification manifest can describe an earlier candidate; match its fingerprints before relying on it. Directory identities are revalidated after lock waits, but hostile cross-process changes between filesystem syscalls remain outside the portable sink's protection.
 
-58 focused tests and the full 569-test suite passed, with the existing loader test still skipped. Typecheck, style and coverage passed; independent review approved the two added regression fixes. No live model or account-billing check ran, and remote CI has not run for this uncommitted candidate.
+The initial candidate was committed as `43c87b0`. Later review reproduced three defects despite its green suite. The revised candidate fixes directory replacement during lock contention, real-SDK API failure metadata and usage observation before throwing CLI hooks. It has 76 focused tests and 587 passing full-suite tests, with the existing loader test still skipped. Typecheck, style and coverage passed. Standalone code review found no concrete code findings in the defect fixes, not approval to merge or certify rollout. No live model or account-billing check ran, and remote CI has not run for this candidate.
 
 ## Deliberate non-goals
 

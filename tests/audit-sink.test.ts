@@ -5,9 +5,11 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -135,6 +137,162 @@ describe("local audit sink", () => {
       expect(warning).not.toContain("request-1");
     },
   );
+
+  it.each([
+    ["directory", false],
+    ["directory", true],
+    ["ancestor", false],
+    ["ancestor", true],
+    ["root", false],
+    ["root", true],
+  ] as const)(
+    "rejects a %s symlink swap during lock contention, existing daily file: %s",
+    async (component, existingDaily) => {
+      const target = join(root, "local", "audit");
+      mkdirSync(join(target, ".append-lock"), { recursive: true });
+      const replaced =
+        component === "directory"
+          ? target
+          : component === "ancestor"
+            ? join(root, "local")
+            : root;
+      const victim =
+        component === "directory"
+          ? outside
+          : component === "ancestor"
+            ? join(outside, "audit")
+            : join(outside, "local", "audit");
+      mkdirSync(victim, { recursive: true, mode: 0o755 });
+      const expired = join(victim, "2026-06-01.jsonl");
+      const daily = join(victim, `${today}.jsonl`);
+      writeFileSync(expired, "expired but outside\n");
+      if (existingDaily)
+        writeFileSync(daily, "outside daily\n", { mode: 0o644 });
+      const mode = statSync(victim).mode;
+      const warn = vi.fn();
+      // append runs synchronously up to its first lock wait. No timing sleeps
+      // or filesystem mocks: replace the directory while that wait is pending.
+      const pending = sink(
+        {
+          PI_CLAUDE_SUBSCRIPTION_AUDIT: "1",
+          PI_CLAUDE_SUBSCRIPTION_AUDIT_DIR: target,
+        },
+        { warn },
+      ).append(record());
+      const parked = `${root}-parked`;
+      renameSync(replaced, parked);
+      symlinkSync(outside, replaced, "dir");
+      try {
+        await expect(pending).resolves.toBeUndefined();
+        expect(readdirSync(victim).sort()).toEqual(
+          existingDaily
+            ? ["2026-06-01.jsonl", `${today}.jsonl`]
+            : ["2026-06-01.jsonl"],
+        );
+        expect(readFileSync(expired, "utf8")).toBe("expired but outside\n");
+        if (existingDaily) {
+          expect(readFileSync(daily, "utf8")).toBe("outside daily\n");
+          expect(statSync(daily).mode & 0o777).toBe(0o644);
+        }
+        expect(statSync(victim).mode).toBe(mode);
+        expect(warn).toHaveBeenCalled();
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(outside);
+      } finally {
+        unlinkSync(replaced);
+        renameSync(parked, replaced);
+      }
+    },
+  );
+
+  it("rejects a different real directory at the same path after a lock wait", async () => {
+    mkdirSync(join(dir(), ".append-lock"), { recursive: true });
+    const warn = vi.fn();
+    const pending = sink(undefined, { warn }).append(record());
+    renameSync(dir(), join(root, "original-audit"));
+    mkdirSync(dir());
+    writeFileSync(join(dir(), "2026-06-01.jsonl"), "keep\n");
+    await pending;
+    expect(readdirSync(dir())).toEqual(["2026-06-01.jsonl"]);
+    expect(readFileSync(join(dir(), "2026-06-01.jsonl"), "utf8")).toBe(
+      "keep\n",
+    );
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("resumes a contended append when the original directory is unchanged", async () => {
+    mkdirSync(join(dir(), ".append-lock"), { recursive: true });
+    const warn = vi.fn();
+    const pending = sink(undefined, { warn }).append(record());
+    rmSync(join(dir(), ".append-lock"), { recursive: true });
+    await pending;
+    expect(lines()).toHaveLength(1);
+    expect(existsSync(join(dir(), ".append-lock"))).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("revalidates after the clock callback before retention or writing", async () => {
+    mkdirSync(dir());
+    writeFileSync(join(outside, "2026-06-01.jsonl"), "keep outside\n");
+    const warn = vi.fn();
+    await sink(undefined, {
+      warn,
+      now: () => {
+        renameSync(dir(), join(root, "original-audit"));
+        symlinkSync(outside, dir(), "dir");
+        return now();
+      },
+    }).append(record());
+    expect(readdirSync(outside)).toEqual(["2026-06-01.jsonl"]);
+    expect(readFileSync(join(outside, "2026-06-01.jsonl"), "utf8")).toBe(
+      "keep outside\n",
+    );
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it.each(["directory", "ancestor"])(
+    "does not clean an outside lock after a warning callback swaps the %s",
+    async (component) => {
+      const target = join(root, "local", "audit");
+      const replaced = component === "directory" ? target : join(root, "local");
+      const victim =
+        component === "directory" ? outside : join(outside, "audit");
+      mkdirSync(join(victim, ".append-lock"), { recursive: true });
+      writeFileSync(join(victim, "2026-06-01.jsonl"), "keep outside\n");
+      let swapped = false;
+      const warn = vi.fn(() => {
+        if (swapped) return;
+        renameSync(replaced, join(root, "original-directory"));
+        symlinkSync(outside, replaced, "dir");
+        swapped = true;
+      });
+      await sink(
+        {
+          PI_CLAUDE_SUBSCRIPTION_AUDIT: "1",
+          PI_CLAUDE_SUBSCRIPTION_AUDIT_DIR: target,
+        },
+        { warn, maxFileBytes: 1 },
+      ).append(record());
+      expect(swapped).toBe(true);
+      expect(readdirSync(victim).sort()).toEqual([
+        ".append-lock",
+        "2026-06-01.jsonl",
+      ]);
+      expect(readFileSync(join(victim, "2026-06-01.jsonl"), "utf8")).toBe(
+        "keep outside\n",
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(outside);
+    },
+  );
+
+  it("does not remove a replacement lock in the original directory", async () => {
+    const warn = vi.fn().mockImplementationOnce(() => {
+      renameSync(join(dir(), ".append-lock"), join(dir(), ".owned-lock"));
+      mkdirSync(join(dir(), ".append-lock"));
+    });
+    await sink(undefined, { warn, maxFileBytes: 1 }).append(record());
+    expect(existsSync(join(dir(), ".append-lock"))).toBe(true);
+    expect(existsSync(join(dir(), ".owned-lock"))).toBe(true);
+  });
 
   it("does not follow a pre-existing daily-file symlink", async () => {
     mkdirSync(dir());

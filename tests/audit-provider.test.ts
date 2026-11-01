@@ -401,6 +401,49 @@ describe("CLI local audit lifecycle", () => {
     );
   });
 
+  it.each(["message_start", "message_delta"])(
+    "preserves observed usage when a hook throws on %s",
+    async (throwOn) => {
+      await setup();
+      vi.stubEnv(
+        "FAKE_CLAUDE_STREAM_SCRIPT",
+        JSON.stringify([
+          {
+            type: "stream_event",
+            event: {
+              type: "message_start",
+              message: { usage: { input_tokens: 123, output_tokens: 0 } },
+            },
+          },
+          {
+            type: "stream_event",
+            event: {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { input_tokens: 456, output_tokens: 7 },
+            },
+          },
+        ]),
+      );
+      await settled(
+        streamViaCli(model, context(), {
+          onProviderStreamEvent: (event: any) => {
+            if (event.type === throwOn) throw new Error(SECRET);
+          },
+        }),
+      );
+      expect(terminal()).toMatchObject({
+        outcome: "error",
+        reason: "hook_error",
+        hook: "onProviderStreamEvent",
+        usage: {
+          input: throwOn === "message_start" ? 123 : 456,
+          output: throwOn === "message_start" ? 0 : 7,
+        },
+      });
+    },
+  );
+
   it("records known cache buckets and API-equivalent estimated costs, including 1h writes", async () => {
     await setup();
     const event = (value: object) => ({ type: "stream_event", event: value });

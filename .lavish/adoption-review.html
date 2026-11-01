@@ -284,8 +284,8 @@
         <div class="alert alert-info">
           <p>
             Implemented on feat/local-audit, not yet released or installed. Safe
-            local audit logging is separate from raw stderr debug output. 58
-            focused tests and 569 full-suite tests pass, with the known
+            local audit logging is separate from raw stderr debug output. 76
+            focused tests and 587 full-suite tests pass, with the known
             packed-loader check still skipped.
           </p>
         </div>
@@ -360,9 +360,13 @@
         <p>
           Synthetic checks cover off-mode behavior, privacy canaries, early
           failures, both routes, partial usage, concurrency, retention, disk
-          failure and incomplete runs. Independent review approved the fixes for
-          unknown API usage and a relay-startup cancellation race. Full
-          coverage, typecheck and style checks passed. No live account request
+          failure and incomplete runs. Later review reproduced three defects in
+          the initial candidate. Regression fixes now reject directory swaps
+          during lock waits, capture API HTTP failure metadata and retain usage
+          before a throwing CLI hook. Standalone review found no concrete code
+          findings in those fixes, not merge approval. Hostile cross-process
+          directory changes between filesystem syscalls remain a limitation.
+          Coverage, typecheck and style checks passed. No live account request
           or actual-host loading certification was performed.
         </p>
       </section>

@@ -32,8 +32,8 @@ Each JSONL line has `schemaVersion: 1` and a UTC `timestamp`. Event types are `r
 
 - Requests have a generated `requestId`, model, route `cli` or `api`, configured replay/resume mode and observed extension/Pi/CLI versions. Unavailable versions are null. CLI version uses the last startup observation; no extra credential or account probe runs for audit records.
 - Starts precede tool-inventory and provider preflight checks. Terminal records cover successful text/tool/length stops, cancellation, unsupported attachments, repeated failing tools, inventory setup, CLI spawn/exit, empty/incomplete output, result errors, hook errors, auth/rate/server failures and timeouts. Errors use bounded categories rather than raw exception text.
-- CLI records include observed upstream/rejected counts, safe failure HTTP status and numeric retry-after when available. A resume-to-replay fallback has one request ID and terminal record with distinguishable attempts.
-- `usage` includes reported input, output, cache-read, cache-write and 1-hour cache-write tokens. Fields not observed are null, including API failures before a response. Later reported usage corrects earlier counts rather than adding them again.
+- CLI records include observed upstream/rejected counts, safe failure HTTP status and numeric retry-after when available. A resume-to-replay fallback has one request ID and terminal record with distinguishable attempts. API failure status and numeric retry-after are observed through a request-local fetch wrapper because the SDK does not deliver failed responses to `onResponse`. The wrapper preserves the caller's transport, response body and hook behavior. A new attempt clears previous failure metadata, so recovered failures are not attributed to a later hook or network error.
+- `usage` includes reported input, output, cache-read, cache-write and 1-hour cache-write tokens. Fields not observed are null, including API failures before a response. Later reported usage corrects earlier counts rather than adding them again. Both routes record received usage before invoking stream-event hooks, so a throwing hook does not erase the counts already observed.
 - `estimatedCost` contains API-equivalent estimates for known buckets, not subscription charges or quota usage. When a bucket is unknown its estimate is null; the total is null unless all component estimates are known. An unknown cache tier uses the model's ordinary cache-write estimate, consistent with existing provider estimation; it does not prove a 5-minute cache tier.
 - `cleanup` distinguishes attempted cleanup from observed process close and successful resource removal. `confirmed` for the process means its close event was observed, not that every possible descendant was independently checked. API cleanup remains unknown because this extension does not own its transport.
 
@@ -68,7 +68,7 @@ Logs cannot identify the Team billing pool, prove every extension works, or reve
 
 ## Retention and failure limits
 
-Directories are mode 0700 and files 0600 on supported POSIX platforms. Appends use an inter-process lock, size checks and fsync; concurrent records are serialized. Daily files stop accepting records at 5 MiB and warn rather than growing without bound. Writes remove daily files older than the current UTC day and six preceding days. Archive needed files privately before they expire.
+Directories are mode 0700 and files 0600 on supported POSIX platforms. Appends use an inter-process lock, size checks and fsync; concurrent records are serialized. Open directory descriptors retain the verified root/component identities across lock waits. Replaced directories are rejected before retrying the lock, retention, append and lock removal. The retention/append section has no asynchronous waits or caller callbacks after revalidation. These checks cover replacement during lock contention, not hostile cross-process replacement between filesystem syscalls. Node's portable filesystem API does not provide atomic descriptor-relative operations, so the installation directory must not be writable by an untrusted process. Daily files stop accepting records at 5 MiB and warn rather than growing without bound. Writes remove daily files older than the current UTC day and six preceding days. Archive needed files privately before they expire.
 
 A hard kill during an append can leave `<audit-directory>/.append-lock`. Later writes time out and warn; they do not steal a potentially live lock. If it remains, stop all Pi sessions and loader checks using that directory before removing the empty stale lock directory. A partial final line after a hard kill is also possible. Neither case justifies inventing a terminal record.
 
@@ -76,15 +76,17 @@ Default audit data is Git-ignored. JSONL files and lock directories are excluded
 
 ## Verification evidence
 
-The implementation has 58 focused synthetic tests, including filesystem privacy, off-mode behavior, retention/size limits, concurrent appends, write failures, early errors, successful/partial usage, cancellation races, both provider routes and standalone SDK loader delegation. Four additional regression assertions failed before review fixes and pass afterward.
+The implementation has 76 focused synthetic tests, including filesystem privacy, off-mode behavior, retention/size limits, concurrent appends, write failures, early errors, successful/partial usage, cancellation races, both provider routes and standalone SDK loader delegation.
 
-Local Linux checks on the current working-tree candidate passed:
+The initial candidate was committed as `43c87b0`. Subsequent adversarial review found three defects despite its green tests. Regression tests reproduced outside-directory writes/deletion during lock contention, missing real-SDK API HTTP failure metadata and usage lost when a CLI stream hook throws. Those tests failed against the initial implementation and pass with the fixes. Added checks also cover root/ancestor swaps, replacement locks, recovered HTTP retries and later usage corrections.
 
-- 569 tests, with the pre-existing packed-loader test still skipped;
-- coverage of 96.89% statements/lines, 90.86% branches and 98.62% functions;
+Local Linux checks on the revised candidate passed:
+
+- 587 tests, with the pre-existing packed-loader test still skipped;
+- coverage of 97.36% statements/lines, 91.55% branches and 98.63% functions;
 - typecheck and style checks;
-- independent round-two review, 58 focused tests and typecheck.
+- standalone code review found no concrete code findings in the defect fixes. This is not merge approval or installed-host certification.
 
 The configured coverage percentage covers TypeScript source, not the CJS sink or the standalone subprocess. Behavioral tests execute both separately. No live model, billing-account check or actual-host load certification was performed. The source release's green CI is historical evidence, not remote CI for these uncommitted changes. `npm ci` reported 35 dependency audit findings, including four critical; no unrelated dependency upgrades were applied.
 
-A local `.audit/verification.json` manifest records commands, outcomes and source fingerprints for this candidate. It is verification metadata, not a runtime usage record or a new billing claim. The loader check records fresh loader evidence in the daily ledger when explicitly run; the human-readable historical release evidence remains linked in [the roadmap](roadmap.md).
+A local `.audit/verification.json` manifest may describe an earlier candidate. Check its source fingerprints before using it as evidence for the current revision. It is verification metadata, not a runtime usage record or a new billing claim. The loader check records fresh loader evidence in the daily ledger when explicitly run; the human-readable historical release evidence remains linked in [the roadmap](roadmap.md).

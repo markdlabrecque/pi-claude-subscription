@@ -150,6 +150,32 @@ function sanitize(record) {
   return out;
 }
 
+// Keep descriptors open so an unlinked directory's inode cannot be reused while
+// an append is waiting. A matching pathname alone is not a stable identity.
+function verifyDirectories(directories) {
+  for (const { filename, fd } of directories) {
+    const expected = fs.fstatSync(fd, { bigint: true });
+    const actual = fs.lstatSync(filename, { bigint: true });
+    if (
+      !actual.isDirectory() ||
+      actual.dev !== expected.dev ||
+      actual.ino !== expected.ino
+    )
+      throw new Error("directory replaced");
+  }
+}
+
+function bindDirectory(filename, directories) {
+  const fd = fs.openSync(
+    filename,
+    fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
+  );
+  const directory = { filename, fd };
+  directories.push(directory);
+  verifyDirectories(directories);
+  return directory;
+}
+
 function createAuditSink({
   extensionRoot,
   env = process.env,
@@ -171,6 +197,7 @@ function createAuditSink({
       let lock;
       let fd;
       let originalSize;
+      const directories = [];
       try {
         const root = fs.realpathSync(extensionRoot);
         const target = path.resolve(
@@ -189,6 +216,7 @@ function createAuditSink({
         // Walk components before creating children. Reject symlinks rather than
         // following one outside the installation, including dangling links.
         let dir = root;
+        let directory = bindDirectory(root, directories);
         for (const component of relative.split(path.sep)) {
           dir = path.join(dir, component);
           try {
@@ -202,25 +230,43 @@ function createAuditSink({
             return;
           }
           if (!stat.isDirectory()) throw new Error("directory unavailable");
+          directory = bindDirectory(dir, directories);
         }
-        fs.chmodSync(dir, 0o700);
+        fs.fchmodSync(directory.fd, 0o700);
         const lockPath = path.join(dir, ".append-lock");
         // Cross-process exclusion covers both size checks and retention. A hard
         // kill may leave a lock; time out visibly rather than stealing a live lock.
         for (let i = 0; i < 100; i++) {
+          // Every retry must still address the original root and components.
+          // In particular, never create a lock through a post-wait symlink.
+          verifyDirectories(directories);
           try {
             fs.mkdirSync(lockPath, { mode: 0o700 });
-            lock = lockPath;
-            break;
           } catch (error) {
             if (error.code !== "EEXIST") throw error;
             await delay(10);
+            continue;
           }
+          lock = bindDirectory(lockPath, directories);
+          break;
         }
         if (!lock) throw new Error("lock unavailable");
         const date = now();
         const day = date.toISOString().slice(0, 10);
         const cutoff = Date.parse(`${day}T00:00:00Z`) - 6 * 86400000;
+        const safe = sanitize(record);
+        const line = safe
+          ? JSON.stringify({
+              ...safe,
+              schemaVersion: 1,
+              timestamp: date.toISOString(),
+            }) + "\n"
+          : null;
+        // Run caller-controlled clock/record access before revalidation. From
+        // here through retention and append there are no awaits or callbacks.
+        // This closes event-loop swaps on Linux/macOS, not hostile OS-process
+        // races between syscalls: Node has no portable openat/unlinkat API.
+        verifyDirectories(directories);
         for (const name of fs.readdirSync(dir)) {
           if (
             /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name) &&
@@ -230,14 +276,7 @@ function createAuditSink({
             if (fs.lstatSync(old).isFile()) fs.unlinkSync(old);
           }
         }
-        const safe = sanitize(record);
-        if (!safe) return;
-        const line =
-          JSON.stringify({
-            ...safe,
-            schemaVersion: 1,
-            timestamp: date.toISOString(),
-          }) + "\n";
+        if (!line) return;
         const filename = path.join(dir, `${day}.jsonl`);
         fd = fs.openSync(
           filename,
@@ -285,9 +324,21 @@ function createAuditSink({
           notify("flush failed: audit unavailable");
         }
         try {
-          if (lock) fs.rmdirSync(lock);
+          if (lock) {
+            // Warning handlers can also replace a directory. Never remove a
+            // lock unless its identity and the entire original chain match.
+            verifyDirectories(directories);
+            fs.rmdirSync(lock.filename);
+          }
         } catch {
           notify("write failed: audit lock unavailable");
+        }
+        for (const directory of directories.reverse()) {
+          try {
+            fs.closeSync(directory.fd);
+          } catch {
+            notify("close failed: audit unavailable");
+          }
         }
       }
     },
