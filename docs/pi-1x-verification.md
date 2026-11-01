@@ -1,5 +1,11 @@
 # Pi 1.x migration verification
 
+## Current release status
+
+As of 2026-11-01, v0.4.0 is released on GitHub at commit `8f8b45b`. [Main CI run 41323671647](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41323671647) passed Linux/macOS tests, lint and typecheck. The packed-tarball loader test below remains skipped and its acceptance item is not met. The successful suite is not installation certification.
+
+All 45 GitHub issues are closed. Some sections below record earlier implementation runs, not current pending tickets or fresh acceptance of the whole release. See [the reconciled roadmap](roadmap.md) and [first tool-result cache verification](first-tool-result-cache-verification.md) for later evidence. No new live request or account billing check was made for this documentation reconciliation.
+
 ## Verified versions
 
 - Minimum Pi release: 1.4.0.
@@ -38,7 +44,7 @@ The previous workflow targeted only `main`, so pushes and pull requests targetin
 
 Local re-verification of the CI-trigger change on Linux used Node 22.19.0 and the locked Pi SDK pair at 1.4.0. `npm run test:coverage` passed 498 tests in 43 files, with the separate #38 packed-tarball test still skipped. Coverage was 98.19% statements/lines, 91.79% branches and 99.2% functions. `npm run typecheck` and `npm run check-style` passed. YAML parsing and explicit trigger, matrix and runtime assertions also passed. Only fake CLI/upstream requests were used.
 
-[CI run 41283185003](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41283185003) on commit `b183e03` passed lint, typecheck and the Linux/macOS test jobs; the Windows test job failed. The maintainer then explicitly dropped native Windows support and its CI job. This supersedes #46's earlier three-platform acceptance requirement; Windows is not treated as passing or repaired. Linux/macOS tests and assertions are unchanged. Keep #46 open pending the follow-up run with the supported-platform matrix.
+[CI run 41283185003](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41283185003) on commit `b183e03` passed lint, typecheck and the Linux/macOS test jobs; the Windows test job failed. The maintainer then explicitly dropped native Windows support and its CI job. This supersedes #46's earlier three-platform acceptance requirement; Windows is not treated as passing or repaired. Linux/macOS tests and assertions are unchanged. The supported-platform follow-up passed; #46 is now closed. The v0.4.0 main CI run linked above also passed on Linux/macOS.
 
 ## Packed-tarball load (#38)
 
@@ -60,9 +66,11 @@ Local re-verification of the CI-trigger change on Linux used Node 22.19.0 and th
   - `npm run lint`: passed, exit 0.
   - `npm run format:check`: passed, exit 0; all matched files use Prettier code style.
   - `npm run test:coverage`: run 3 times. Runs 2 and 3 passed 432/432 tests with coverage for all files at 98.18% statements, 91.5% branches, 99.16% functions and 98.18% lines, above the existing thresholds.
-  - Intermittent failure: coverage run 1 failed 3 of 432 tests in `tests/sdk-startup.test.ts`, `tests/pi-instructions.test.ts` and `tests/provider-hooks.test.ts`. In each, the fake upstream saw 2 requests instead of 1, or an extra `GET /`. It did not recur in the later runs and is not fixed by this change; it remains open.
+  - Intermittent failure: coverage run 1 failed 3 of 432 tests in `tests/sdk-startup.test.ts`, `tests/pi-instructions.test.ts` and `tests/provider-hooks.test.ts`. In each, the fake upstream saw 2 requests instead of 1, or an extra `GET /`. It did not recur in the later runs and was not fixed by this change. This is an unresolved observation from that run, not a currently open GitHub issue.
   - Remote CI: not run.
 
 ## Boundaries
 
-Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41 and broader extension compatibility #14 remain separate. The #50/#51 checks in #52 consume their behaviour and do not repeat their test matrices. Pricing #34 and human billing verification #35 are unchanged. Cache optimization waits for #39, #40 and #42.
+Instruction forwarding #40, tool inventory/activation #42, workspace guidance #43, terminal failures #41, documented extension compatibility #14, scoped environment #50 and hooks #51 are implemented and closed. Their individual tests still define the extent of coverage; #52 does not certify arbitrary extensions or native-provider parity.
+
+Pricing/accounting #34 and cache-prefix fixes #32/#33 are also implemented. #35 was closed because the maintainer disabled extra spending, without a recorded account-side billing-pool measurement. Remaining loader, dropped-stream and acceptance-evidence gaps are listed in the roadmap rather than presented as open issues.

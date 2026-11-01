@@ -5,6 +5,7 @@
  * subprocess using stream-json NDJSON protocol.
  */
 
+import { randomUUID } from "node:crypto";
 import {
   createAssistantMessageEventStream,
   getCurrentTools,
@@ -29,6 +30,14 @@ import {
 } from "./src/api-key-fallback.js";
 import { resolveEnv } from "./src/env-flag.js";
 import { toMcpToolDefs, writeMcpConfig } from "./src/mcp-config.js";
+import { createAuditSink } from "./src/audit.js";
+import {
+  extensionRoot,
+  auditVersions,
+  startAuditRequest,
+  unknownUsage,
+  unknownCleanup,
+} from "./src/audit-request.js";
 
 // Kill all active Claude subprocesses on process exit to prevent orphans
 process.on("exit", killAllProcesses);
@@ -68,10 +77,26 @@ function failedRequest(
 }
 
 export default function (pi: ExtensionAPI) {
+  const startupAudit = createAuditSink({ extensionRoot, env: process.env });
+  const recordStartup = (outcome: string, reason: string) => {
+    if (
+      ["1", "true"].includes(process.env.PI_CLAUDE_SUBSCRIPTION_AUDIT ?? "")
+    ) {
+      void startupAudit.append({
+        event: "registration",
+        requestId: randomUUID(),
+        outcome,
+        reason,
+        versions: auditVersions(),
+      });
+    }
+  };
+  let stage = "cli_missing";
   try {
     // Startup validation
     validateCliPresence(); // throws if CLI not on PATH
-    validateCliAuth(); // warns if not authenticated
+    stage = "registration_error";
+    if (!validateCliAuth()) recordStartup("failure", "auth_unavailable"); // warns if not authenticated
 
     const models = filterLatestPerFamily(
       anthropicProvider()
@@ -99,12 +124,20 @@ export default function (pi: ExtensionAPI) {
         if (isApiKeyFallbackEnabled(resolveEnv(options?.env))) {
           return streamViaAnthropic(model, context, options);
         }
+        const audit = startAuditRequest(model, resolveEnv(options?.env), "cli");
         let configPath: string | undefined;
         try {
           configPath = writeRequestMcpConfig(context.messages);
         } catch (err) {
           // Never start a generation without the tools Pi offered
           const reason = err instanceof Error ? err.message : String(err);
+          void audit.finish({
+            outcome: "error",
+            reason: "tool_inventory_error",
+            usage: unknownUsage(),
+            estimatedCost: { total: null },
+            cleanup: unknownCleanup(),
+          });
           return failedRequest(
             model,
             `Could not prepare the tool list for Claude: ${reason}`,
@@ -113,10 +146,13 @@ export default function (pi: ExtensionAPI) {
         return streamViaCli(model, context, {
           ...options,
           mcpConfigPath: configPath,
+          auditRequest: audit,
         });
       },
     });
+    recordStartup("success", "registered");
   } catch (err) {
+    recordStartup("failure", stage);
     console.error(`[pi-claude-subscription] Failed to register provider:`, err);
   }
 }

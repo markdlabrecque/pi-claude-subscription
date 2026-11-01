@@ -11,6 +11,31 @@ import { execSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createIsolation } from "./isolation.js";
 
+const cleanupObservations = new WeakMap<
+  ChildProcess,
+  { process: string; sandbox: string }
+>();
+let observedCliVersion: string | null = null;
+export const getObservedCliVersion = () => observedCliVersion;
+
+/** Wait only for an observed close, never equate a kill request with cleanup. */
+export async function observeProcessCleanup(proc: ChildProcess) {
+  const state = cleanupObservations.get(proc);
+  if (!state) return { process: "unknown", sandbox: "unknown" };
+  if (state.process === "unknown" && proc.pid) {
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        proc.removeListener("close", done);
+        resolve();
+      };
+      const timer = setTimeout(done, 1500);
+      proc.once("close", done);
+    });
+  }
+  return { ...state };
+}
+
 /**
  * Credentials the CLI would prefer over the subscription login, and a parent
  * Claude Code session's identity, which would make the CLI report itself as
@@ -115,8 +140,21 @@ export function spawnClaude(
     });
     // Reap anything the CLI left running in its group
     proc.once("exit", () => killProcessGroup(proc));
-    proc.once("close", isolation.cleanup);
-    proc.once("error", isolation.cleanup);
+    const cleanup = { process: "unknown", sandbox: "unknown" };
+    cleanupObservations.set(proc, cleanup);
+    const removeSandbox = () => {
+      try {
+        isolation.cleanup();
+        cleanup.sandbox = "confirmed";
+      } catch {
+        cleanup.sandbox = "failed";
+      }
+    };
+    proc.once("close", () => {
+      cleanup.process = "confirmed";
+      removeSandbox();
+    });
+    proc.once("error", removeSandbox);
     return proc as ChildProcess;
   } catch (err) {
     isolation.cleanup();
@@ -305,6 +343,7 @@ export function validateCliPresence(): void {
   }
 
   const version = output.match(/\d+\.\d+\.\d+/)?.[0];
+  observedCliVersion = version ?? null;
   const { min, maxExclusive } = TESTED_CLI_RANGE;
   if (
     !version ||
