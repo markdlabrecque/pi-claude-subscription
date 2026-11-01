@@ -32,6 +32,14 @@ Local results: 26 test files, 360 tests passed. Coverage exceeds the existing 92
 5. `tests/registered-tools.test.ts` drives a normalized stable-inventory custom tool call/result round-trip through the registered callback. Pi/test-side execution produces the result used in the final streamed text. It checks schema-only MCP, exact names/arguments, synthetic host marker exclusion, fresh private cwd/config/schema cleanup, process cleanup and closed relay ports. Process-tree cleanup has been executed locally on Linux only; native Windows has the limitation noted above. A fake CLI attempts an extra generation on each request; only one reaches upstream.
 6. `tests/pi-real-shape.test.ts` now uses the registered callback and local SDK for the existing normalized name-resolution/unknown-name/bounded-repeat regressions. Existing break-early, isolation, error/cancel cleanup and relay guard regressions remain intact.
 
+## CI execution gate (#46)
+
+The previous workflow targeted only `main`, so pushes and pull requests targeting `develop` did not run CI. The workflow now targets both branches and also supports `workflow_dispatch`. The Linux/macOS/Windows matrix, Node 22.19.0 runtime, installed-SDK checks, coverage thresholds and cleanup assertions are unchanged.
+
+Local re-verification of the CI-trigger change on Linux used Node 22.19.0 and the locked Pi SDK pair at 1.4.0. `npm run test:coverage` passed 498 tests in 43 files, with the separate #38 packed-tarball test still skipped. Coverage was 98.19% statements/lines, 91.79% branches and 99.2% functions. `npm run typecheck` and `npm run check-style` passed. YAML parsing and explicit trigger, matrix and runtime assertions also passed. Only fake CLI/upstream requests were used.
+
+This is not remote CI evidence. Keep #46 open until the workflow runs against the change and the required platform results are reviewed. The native-Windows process-tree limitation above remains unresolved; no job or assertion was disabled to hide it.
+
 ## Packed-tarball load (#38)
 
 - Tested Pi version: 1.4.0 (`@earendil-works/pi-coding-agent@1.4.0`).
