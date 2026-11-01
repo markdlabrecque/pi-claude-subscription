@@ -151,6 +151,8 @@ Why not the alternatives:
 
 Keep each block's bytes stable between turns, and do not put a trailing instruction in the last block. Earlier blocks then hit the prompt cache.
 
+The CLI also prepends an environment reminder containing its fresh private cwd. Before forwarding, the provider replaces only that generated cwd value with `[private CLI transport directory, not the Pi workspace]`. All other reminder text, Pi instructions, workspace guidance, history and current tool declarations are preserved. The actual subprocess still runs in a fresh private directory, deleted after the request. Caller `onPayload` hooks see the normalized body and can still edit or replace it. This matching is specific to the CLI's reminder format; CLI changes, date changes, instruction updates and tool-loadout changes can still invalidate the prefix. See [current cache verification](docs/cache-prefix-verification.md).
+
 ### Base URL under subscription login
 
 **Honoured.** `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` (plain http on loopback) sends `POST /v1/messages?beta=true` to the proxy, with an `authorization` header and `anthropic-beta: oauth-2025-04-20,...`. Forwarding the first request to `https://api.anthropic.com` with the headers passed through untouched returned 200 and a real completion, for Haiku, Fable and image input. The relay design stands. Relay pitfalls:
@@ -188,7 +190,15 @@ Resume notes:
 
 Opt-in runs against the real `claude` CLI and a real subscription. They are not part of `npm test`. `scripts/acceptance/run.ts` drives `streamViaCli` the way Pi does (Haiku, two schema-only Pi tools, short prompts), runs the tools itself, and reads the relay's own per-request log lines. `scripts/acceptance/claude-spy.cjs` sits in front of the real CLI on PATH and records only the type of each CLI output message, so Claude Code tool executions (a `user` message with a `tool_result` block) can be counted. On the host the run uses a private `CLAUDE_CONFIG_DIR` with a symlink to the existing login, so the CLI's own state stays out of `~/.claude`.
 
-Run on 2026-10-15, Linux, CLI 2.1.301, model `haiku`.
+For a real-CLI cache-prefix check without subscription traffic:
+
+```bash
+npx vite-node scripts/acceptance/cache-prefix.ts
+```
+
+Add `--live` to send three requests using the existing Claude CLI login and assert that each follow-up reads at least the previous turn's cached read plus write tokens. Both modes compare consecutive request prefixes without logging payloads or credentials. [Verification evidence](docs/cache-prefix-verification.md) records the tested versions and limits.
+
+The following older runs were made on 2026-10-15, Linux, CLI 2.1.301, model `haiku`.
 
 ### 1. 50 consecutive tool-using turns
 

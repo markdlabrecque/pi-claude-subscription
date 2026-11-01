@@ -179,6 +179,9 @@ async function run(userMessage) {
   if (process.env.FAKE_CLAUDE_EMPTY_EXIT) process.exit(0);
   recordProcessTree();
   const context = [
+    // Opt-in reproduction of the real CLI 2.1.316's leading environment block.
+    process.env.FAKE_CLAUDE_ENVIRONMENT_REMINDER === "1" &&
+      `<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${process.cwd()}\n - Platform: test-platform\n</system-reminder>`,
     claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
     hookOutput("UserPromptSubmit"),
   ].filter(Boolean);
