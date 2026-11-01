@@ -57,6 +57,7 @@ import { removeMcpConfig } from "./mcp-config.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 import { getSessionMode } from "./session-mode.js";
+import { normalizeCliEnvironment } from "./isolation.js";
 import { isDebugEnabled } from "./debug-log.js";
 import { resolveEnv } from "./env-flag.js";
 import {
@@ -271,7 +272,10 @@ export function streamViaCli(
       const { onPayload, onResponse } = options ?? {};
       relay = await startRelay({
         upstream: env.ANTHROPIC_BASE_URL,
-        onPayload: onPayload && ((payload) => onPayload(payload, model)),
+        onPayload: (payload) => {
+          normalizeCliEnvironment(payload);
+          return onPayload?.(payload, model);
+        },
         onResponse: onResponse && ((response) => onResponse(response, model)),
       });
 
