@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global fetch */
+/* global fetch, setInterval */
 // Minimal stand-in for `claude -p --input-format stream-json --output-format stream-json`.
 // Reads one user message from stdin, forwards the prompt upstream (like the real CLI
 // would), and replays the reply as stream-json events.
@@ -11,6 +11,15 @@ const { execSync, spawn } = require("node:child_process");
 const readline = require("node:readline");
 
 const args = process.argv.slice(2);
+// Startup probes must never inspect a real login or make a request.
+if (args[0] === "--version") {
+  process.stdout.write("2.1.312 (fake Claude Code)\n");
+  process.exit(0);
+}
+if (args[0] === "auth" && args[1] === "status") {
+  process.stdout.write(JSON.stringify({ loggedIn: true }) + "\n");
+  process.exit(0);
+}
 const flag = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -20,7 +29,8 @@ const model = flag("--model") ?? "unknown";
 // Host config the real CLI would load, switched off by the same flags/env.
 const BUILT_IN_TOOLS = ["Bash", "Read", "Edit", "Write", "Grep", "Glob"];
 const DEFAULT_PROMPT = "You are Claude Code, Anthropic's official CLI.";
-const claudeDir = path.join(os.homedir(), ".claude");
+const home = process.env.HOME ?? os.homedir();
+const claudeDir = path.join(home, ".claude");
 const readIf = (file) =>
   fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : "";
 const settingsOn = flag("--setting-sources") !== "";
@@ -97,7 +107,7 @@ function mcpToolNames() {
 // --resume needs a readable one. Otherwise it exits 1 with this message and
 // sends no request (same for a missing and an unreadable file).
 const sessionFile = (id) =>
-  path.join(os.homedir(), ".claude", "sessions", `${id}.jsonl`);
+  path.join(home, ".claude", "sessions", `${id}.jsonl`);
 if (flag("--session-id")) {
   const file = sessionFile(flag("--session-id"));
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -165,8 +175,13 @@ async function run(userMessage) {
     });
     process.exit(1);
   }
+  // FAKE_CLAUDE_EMPTY_EXIT=1: exit 0 silently, with no events and no request.
+  if (process.env.FAKE_CLAUDE_EMPTY_EXIT) process.exit(0);
   recordProcessTree();
   const context = [
+    // Opt-in reproduction of the real CLI 2.1.316's leading environment block.
+    process.env.FAKE_CLAUDE_ENVIRONMENT_REMINDER === "1" &&
+      `<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${process.cwd()}\n - Platform: test-platform\n</system-reminder>`,
     claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
     hookOutput("UserPromptSubmit"),
   ].filter(Boolean);
@@ -192,6 +207,24 @@ async function run(userMessage) {
       fake_cwd: process.cwd(),
       // The CLI arguments, so tests can check for session flags.
       fake_args: args,
+      // The environment the CLI was given: test markers and base URL by value,
+      // forbidden credential/provider variables by name only (never values).
+      fake_env: {
+        markers: Object.fromEntries(
+          Object.entries(process.env).filter(([k]) => k.startsWith("PI_TEST_")),
+        ),
+        baseUrl: process.env.ANTHROPIC_BASE_URL,
+        nonessentialTraffic:
+          process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,
+        disableClaudeMds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS,
+        disableAutoMemory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,
+        forbiddenPresent: Object.keys(process.env).filter(
+          (k) =>
+            k === "ANTHROPIC_API_KEY" ||
+            k === "ANTHROPIC_AUTH_TOKEN" ||
+            k.startsWith("CLAUDE_CODE_USE_"),
+        ),
+      },
       messages: [
         {
           ...userMessage.message,
@@ -207,11 +240,95 @@ async function run(userMessage) {
   let res = await fetch(url, request);
   // Like the real CLI, retry a server error once; the relay rejects the retry.
   if (res.status >= 500) res = await fetch(url, request);
-  const reply = await res.json();
+  let reply;
+  try {
+    reply = await res.json();
+  } catch {
+    // A body cut off mid-stream: retry once, then report the failure on stderr.
+    res = await fetch(url, request);
+    try {
+      reply = await res.json();
+    } catch {
+      process.stderr.write(`API Error: connection closed early\n`);
+      process.exit(1);
+    }
+  }
   if (process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST) {
     // Fail with this stderr text once the request is sent (a mid-turn crash).
     process.stderr.write(process.env.FAKE_CLAUDE_FAIL_AFTER_REQUEST + "\n");
     process.exit(1);
+  }
+  if (process.env.FAKE_CLAUDE_PARTIAL_FAIL) {
+    // Stream some text, then crash with this stderr text (partial output).
+    emit({ type: "system", subtype: "init", session_id: "fake-session" });
+    event({ type: "message_start", message: { usage: reply.usage } });
+    event({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    });
+    event({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: process.env.FAKE_CLAUDE_PARTIAL_TEXT },
+    });
+    process.stderr.write(process.env.FAKE_CLAUDE_PARTIAL_FAIL + "\n");
+    process.exit(1);
+  }
+  if (process.env.FAKE_CLAUDE_RESULT_ERROR) {
+    // Report an error result, after partial text when FAKE_CLAUDE_PARTIAL_TEXT is set.
+    emit({ type: "system", subtype: "init", session_id: "fake-session" });
+    if (process.env.FAKE_CLAUDE_PARTIAL_TEXT) {
+      event({ type: "message_start", message: { usage: reply.usage } });
+      event({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      });
+      event({
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "text_delta",
+          text: process.env.FAKE_CLAUDE_PARTIAL_TEXT,
+        },
+      });
+    }
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: [process.env.FAKE_CLAUDE_RESULT_ERROR],
+    });
+    process.exit(1);
+  }
+  if (process.env.FAKE_CLAUDE_PARTIAL_HANG) {
+    // Stream FAKE_CLAUDE_PARTIAL_TEXT, then hang without finishing the turn.
+    emit({ type: "system", subtype: "init", session_id: "fake-session" });
+    event({ type: "message_start", message: { usage: reply.usage } });
+    event({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    });
+    event({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: process.env.FAKE_CLAUDE_PARTIAL_TEXT },
+    });
+    setInterval(() => {}, 1000);
+    return;
+  }
+  if (process.env.FAKE_CLAUDE_STREAM_SCRIPT) {
+    // Replay these stdout lines verbatim (objects as JSON, strings raw), then
+    // exit with FAKE_CLAUDE_EXIT_CODE (default 0). EOF with no completion is
+    // whatever the script leaves out.
+    for (const line of JSON.parse(process.env.FAKE_CLAUDE_STREAM_SCRIPT)) {
+      process.stdout.write(
+        (typeof line === "string" ? line : JSON.stringify(line)) + "\n",
+      );
+    }
+    process.exit(Number(process.env.FAKE_CLAUDE_EXIT_CODE ?? 0));
   }
   if (!res.ok) {
     // The real CLI reports an API failure on stderr and exits non-zero.
@@ -221,11 +338,15 @@ async function run(userMessage) {
 
   // FAKE_CLAUDE_EXTRA_GENERATIONS=n: try n more generations, as the real CLI
   // would when it runs a tool and continues the turn.
-  for (
-    let i = 0;
-    i < Number(process.env.FAKE_CLAUDE_EXTRA_GENERATIONS ?? 0);
-    i++
-  ) {
+  // FAKE_CLAUDE_CONTINUE_ON_MAX_TOKENS=1: try one continuation after a
+  // max_tokens stop (unconfirmed on the real CLI; see the ADR).
+  const extra =
+    Number(process.env.FAKE_CLAUDE_EXTRA_GENERATIONS ?? 0) +
+    (process.env.FAKE_CLAUDE_CONTINUE_ON_MAX_TOKENS &&
+    reply.stop_reason === "max_tokens"
+      ? 1
+      : 0);
+  for (let i = 0; i < extra; i++) {
     await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },

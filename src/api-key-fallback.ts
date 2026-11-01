@@ -7,14 +7,13 @@
  */
 
 import {
-  getEnvApiKey,
-  getModels,
-  streamSimpleAnthropic,
-  type Context,
+  type TranscriptContext,
   type Model,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
-import { envFlag } from "./env-flag.js";
+} from "@earendil-works/pi-ai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { envFlag, resolveEnv } from "./env-flag.js";
 
 export const API_KEY_FALLBACK_ENV = "PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK";
 
@@ -27,13 +26,15 @@ export function isApiKeyFallbackEnabled(
 /** Stream a request through pi's Anthropic provider using ANTHROPIC_API_KEY. */
 export function streamViaAnthropic(
   model: Model<any>,
-  context: Context,
+  context: TranscriptContext,
   options?: SimpleStreamOptions,
 ) {
   // Models missing from the pi-ai catalog (e.g. the fable alias) are rebuilt
   // from the subscription model.
   const anthropicModel =
-    getModels("anthropic").find((m) => m.id === model.id) ??
+    anthropicProvider()
+      .getModels()
+      .find((m) => m.id === model.id) ??
     ({
       ...model,
       provider: "anthropic",
@@ -41,8 +42,8 @@ export function streamViaAnthropic(
       baseUrl: "https://api.anthropic.com",
     } as Model<"anthropic-messages">);
 
-  return streamSimpleAnthropic(anthropicModel, context, {
+  return streamSimple(anthropicModel, context, {
     ...options,
-    apiKey: getEnvApiKey("anthropic"),
+    apiKey: resolveEnv(options?.env).ANTHROPIC_API_KEY,
   });
 }

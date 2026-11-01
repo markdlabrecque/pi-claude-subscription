@@ -8,9 +8,11 @@
  * - Images in non-final messages get placeholder text with console.warn
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve, join, dirname } from "node:path";
-import { homedir } from "node:os";
+import {
+  getCurrentSystemPrompt,
+  normalizeContext,
+  type Context,
+} from "@earendil-works/pi-ai";
 import {
   mapPiToolNameToClaude,
   translatePiArgsToClaude,
@@ -31,7 +33,7 @@ type AnthropicContentBlock =
     }
   | { type: "document"; source: unknown };
 
-// We use `any` for Context to avoid requiring @mariozechner/pi-ai at dev time.
+// We use `any` for Context to avoid requiring @earendil-works/pi-ai at dev time.
 // At runtime, pi provides the real Context type.
 
 /**
@@ -178,6 +180,15 @@ export function buildResumePrompt(context: {
     if (messages[i].role === "toolResult") {
       startIdx = i;
     } else {
+      break;
+    }
+  }
+
+  // Pi continuing its tool loop: the session already holds the user turn,
+  // so send only what follows the last assistant turn (its tool results).
+  for (let i = messages.length - 1; i > finalUserIndex; i--) {
+    if (messages[i].role === "assistant") {
+      startIdx = i + 1;
       break;
     }
   }
@@ -413,23 +424,69 @@ export function buildPrompt(context: {
 }
 
 /**
- * Describe the first block in the final user message that cannot reach Claude
- * (anything but text, image, or a document with a source), or null if there is none. Rejecting it up
- * front keeps attachments from being dropped silently.
+ * Describe the first block the request would send that cannot reach Claude
+ * intact, or null if there is none. Rejecting it up front keeps attachments
+ * from being dropped or replaced by a placeholder silently.
+ *
+ * Images are carried only in the final user message; tool results carry text
+ * only; user messages may also carry documents with a source. A resumed CLI
+ * session already holds everything up to the last assistant turn, so only
+ * what follows it is checked.
  */
-export function findUnsupportedAttachment(messages: any[]): string | null {
-  const index = findFinalUserMessageIndex(messages);
-  const content = index >= 0 ? messages[index].content : undefined;
-  if (!Array.isArray(content)) return null;
-  const block = content.find(
-    (b) =>
-      b.type !== "text" &&
-      b.type !== "image" &&
-      !(b.type === "document" && b.source),
+export function findUnsupportedAttachment(
+  messages: any[],
+  resumed = false,
+): string | null {
+  const finalUserIndex = findFinalUserMessageIndex(messages);
+  let start = 0;
+  if (resumed) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") {
+        start = i + 1;
+        break;
+      }
+    }
+  }
+
+  for (let i = start; i < messages.length; i++) {
+    const { role, content } = messages[i];
+    if (!Array.isArray(content)) continue;
+    if (role === "user") {
+      for (const block of content) {
+        if (block.type === "text") continue;
+        if (block.type === "document" && block.source) continue;
+        if (block.type === "image") {
+          if (!isValidImage(block)) return MALFORMED_IMAGE;
+          if (i === finalUserIndex) continue;
+          return "an image in an earlier user message cannot be sent by pi-claude-subscription; only images in the latest user message reach Claude.";
+        }
+        return `"${block.type}" attachments are not supported by pi-claude-subscription; only text, images, and documents can be sent.`;
+      }
+    } else if (role === "toolResult") {
+      for (const block of content) {
+        if (block.type === "text") continue;
+        if (block.type === "image") {
+          if (!isValidImage(block)) return MALFORMED_IMAGE;
+          return `an image in the ${messages[i].toolName ?? "tool"} result cannot be sent by pi-claude-subscription; tool results can carry text only.`;
+        }
+        return `"${block.type}" attachments are not supported by pi-claude-subscription in tool results; only text can be sent.`;
+      }
+    }
+  }
+  return null;
+}
+
+const MALFORMED_IMAGE =
+  "an image attachment is malformed and cannot be sent by pi-claude-subscription; it needs non-empty base64 data and a media type.";
+
+/** Whether an image block has the data and media type Claude needs. */
+function isValidImage(block: any): boolean {
+  return (
+    typeof block.data === "string" &&
+    block.data !== "" &&
+    typeof block.mimeType === "string" &&
+    block.mimeType !== ""
   );
-  return block
-    ? `"${block.type}" attachments are not supported by pi-claude-subscription; only text, images, and documents can be sent.`
-    : null;
 }
 
 /** Identical failed tool calls in a row before the provider stops the turn. */
@@ -486,39 +543,30 @@ function findFinalUserMessageIndex(messages: any[]): number {
 }
 
 /**
- * Builds the system prompt from the context's systemPrompt field,
- * appending AGENTS.md content if found (walking up from cwd, then global fallback).
- * Sanitizes .pi references to .claude for Claude Code compatibility.
+ * Builds the system prompt from Pi's current instructions: every system
+ * message in the transcript replayed in order, so later content is appended
+ * and sections are replaced or removed. Pi's text is sent exactly as given.
+ * The provider's own guidance follows it as separate paragraphs.
  */
 export function buildSystemPrompt(
   context: { systemPrompt?: string; messages: any[] },
-  cwd: string,
   replay = false,
 ): string {
   const parts: string[] = [];
 
-  if (context.systemPrompt) {
-    parts.push(context.systemPrompt);
+  const instructions = getCurrentSystemPrompt(
+    normalizeContext(context as Context).messages,
+  );
+  if (instructions) {
+    parts.push(instructions);
   }
 
-  // Look for AGENTS.md
-  const agentsPath = resolveAgentsMdPath(cwd);
-  if (agentsPath) {
-    try {
-      const content = readFileSync(agentsPath, "utf-8");
-      const sanitized = sanitizeAgentsContent(content);
-      parts.push(sanitized);
-    } catch {
-      // If we can't read it, skip silently
-    }
-  }
-
-  // When conversation history has tool results, instruct Claude to use them
-  // instead of trying to re-call tools (which may not be available).
-  if (context.messages?.some((m: any) => m.role === "toolResult")) {
+  // Replay must carry the same guidance before and after the first tool
+  // result. Adding it only once a result exists invalidates the cache prefix.
+  if (replay || context.messages?.some((m: any) => m.role === "toolResult")) {
     parts.push(
-      "IMPORTANT: The conversation history below contains tool results from previously executed tools. " +
-        "Use these results to answer the user's question. Do NOT attempt to re-call tools that already have results.",
+      "IMPORTANT: If the conversation history below contains tool results from previously executed tools, " +
+        "use these results to answer the user's question. Do NOT attempt to re-call tools that already have results.",
     );
   }
 
@@ -640,39 +688,4 @@ function toolResultContentToText(content: string | any[]): string {
 function toolResultHasImages(content: string | any[]): boolean {
   if (typeof content === "string" || !Array.isArray(content)) return false;
   return content.some((block) => block.type === "image");
-}
-
-/**
- * Walk up from cwd looking for AGENTS.md, fall back to ~/.pi/agent/AGENTS.md.
- */
-function resolveAgentsMdPath(cwd: string): string | undefined {
-  let current = resolve(cwd);
-  while (true) {
-    const candidate = join(current, "AGENTS.md");
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-
-  // Fall back to global path
-  const globalPath = join(homedir(), ".pi", "agent", "AGENTS.md");
-  if (existsSync(globalPath)) return globalPath;
-
-  return undefined;
-}
-
-/**
- * Sanitize .pi references to .claude in AGENTS.md content
- * for Claude Code compatibility.
- */
-function sanitizeAgentsContent(content: string): string {
-  let sanitized = content;
-  // ~/.pi -> ~/.claude
-  sanitized = sanitized.replace(/~\/\.pi\b/gi, "~/.claude");
-  // .pi/ -> .claude/ (at word boundary or after whitespace/quotes)
-  sanitized = sanitized.replace(/(^|[\s'"`])\.pi\//g, "$1.claude/");
-  // Remaining standalone .pi references
-  sanitized = sanitized.replace(/\b\.pi\b/gi, ".claude");
-  return sanitized;
 }

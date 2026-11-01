@@ -11,8 +11,17 @@ import { execSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createIsolation } from "./isolation.js";
 
-/** Credentials the CLI would prefer over the subscription login. */
-const STRIPPED_ENV = new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+/**
+ * Credentials the CLI would prefer over the subscription login, and a parent
+ * Claude Code session's identity, which would make the CLI report itself as
+ * Claude Code rather than a separate client.
+ */
+const STRIPPED_ENV = new Set([
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+]);
 
 /**
  * Spawn a Claude CLI subprocess with all required flags for stream-json communication.
@@ -36,6 +45,8 @@ export function spawnClaude(
     stateless?: boolean;
     /** Relay base URL; the CLI sends its API traffic here. */
     baseUrl?: string;
+    /** The request's environment; defaults to the process environment. */
+    env?: Readonly<Record<string, string | undefined>>;
   },
 ): ChildProcess {
   const args = [
@@ -76,8 +87,10 @@ export function spawnClaude(
   const isolation = createIsolation(systemPrompt);
   try {
     // Keep the CLI on the subscription: no API key or other provider may
-    // switch it to API billing behind the relay's back.
-    const env = { ...process.env };
+    // switch it to API billing behind the relay's back, and it must not pass
+    // itself off as a parent Claude Code session. This runs on the request's
+    // environment, so scoped values cannot bring these back either.
+    const env = { ...(options?.env ?? process.env) };
     for (const key of Object.keys(env)) {
       if (STRIPPED_ENV.has(key) || key.startsWith("CLAUDE_CODE_USE_")) {
         delete env[key];

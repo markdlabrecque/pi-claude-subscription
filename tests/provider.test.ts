@@ -35,7 +35,7 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => Buffer.from("2.1.301")),
 }));
 
-// Mock @mariozechner/pi-ai
+// Mock @earendil-works/pi-ai
 const mockModels = [
   {
     id: "claude-sonnet-4-5-20250929",
@@ -59,6 +59,15 @@ const mockModels = [
     contextWindow: 200000,
     maxTokens: 16384,
   },
+  {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1000000,
+    maxTokens: 128000,
+  },
 ];
 
 const { MockAssistantMessageEventStream } = vi.hoisted(() => {
@@ -71,11 +80,26 @@ const { MockAssistantMessageEventStream } = vi.hoisted(() => {
   return { MockAssistantMessageEventStream };
 });
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  getModels: vi.fn(() => mockModels),
-  AssistantMessageEventStream: MockAssistantMessageEventStream,
-  calculateCost: vi.fn(),
+vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
+  anthropicProvider: () => ({
+    getModels: () =>
+      mockModels.map((m) => ({
+        ...m,
+        thinkingLevelMap: m.id.includes("opus") ? { max: "max" } : undefined,
+      })),
+  }),
 }));
+
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
+  return {
+    createAssistantMessageEventStream: () =>
+      new MockAssistantMessageEventStream(),
+    calculateCost: vi.fn(),
+    getCurrentSystemPrompt: actual.getCurrentSystemPrompt,
+    normalizeContext: actual.normalizeContext,
+  };
+});
 
 import spawn from "cross-spawn";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -145,7 +169,7 @@ describe("provider registration (default export)", () => {
     expect(firstModel.cost).toBeDefined();
   });
 
-  it("lists a Fable model when the pi-ai catalog has none", async () => {
+  it("lists exactly one Fable model from the catalog", async () => {
     const registerProvider = vi.fn();
     const mockPi = { registerProvider, on: vi.fn() } as any;
 
@@ -158,6 +182,27 @@ describe("provider registration (default export)", () => {
     expect(ids.filter((id) => id.includes("fable"))).toHaveLength(1);
   });
 });
+
+/**
+ * Assert the stream ended with exactly one terminal event, an error whose
+ * `error` is an assistant message carrying `text` in errorMessage.
+ */
+function expectOneTypedError(mockStream: any, text: string): any {
+  const terminal = mockStream._events.filter(
+    (e: any) => e.type === "done" || e.type === "error",
+  );
+  expect(terminal).toHaveLength(1);
+  expect(terminal[0].type).toBe("error");
+  expect(terminal[0].reason).toBe("error");
+  const message = terminal[0].error;
+  expect(typeof message).toBe("object");
+  expect(Array.isArray(message.content)).toBe(true);
+  expect(message.role).toBe("assistant");
+  expect(message.stopReason).toBe("error");
+  expect(message.errorMessage).toContain(text);
+  expect(mockStream.end).toHaveBeenCalledTimes(1);
+  return message;
+}
 
 describe("streamViaCli", () => {
   beforeEach(() => {
@@ -319,12 +364,7 @@ describe("streamViaCli", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-    const doneEvent = mockStream._events.find(
-      (e: any) => e.type === "done" && e.message,
-    );
-    expect(doneEvent).toBeDefined();
-    expect(doneEvent.message.content).toBeDefined();
-    expect(mockStream.end).toHaveBeenCalled();
+    expectOneTypedError(mockStream, "Rate limit exceeded");
   });
 
   it("surfaces CLI execution errors instead of returning an empty response", async () => {
@@ -345,13 +385,11 @@ describe("streamViaCli", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-    const doneEvent = mockStream._events.find((e: any) => e.type === "done");
-    expect(doneEvent.message.content).toEqual([
-      {
-        type: "text",
-        text: "Error: No conversation found with session ID: missing",
-      },
-    ]);
+    const error = expectOneTypedError(
+      mockStream,
+      "No conversation found with session ID: missing",
+    );
+    expect(error.content).toEqual([]);
     expect(mockStream.end).toHaveBeenCalledTimes(1);
   });
 
@@ -386,7 +424,9 @@ describe("streamViaCli", () => {
     };
     const controller = new AbortController();
 
-    streamViaCli(model, context, { signal: controller.signal });
+    const stream = streamViaCli(model, context, {
+      signal: controller.signal,
+    }) as any;
     await vi.advanceTimersByTimeAsync(0);
 
     const proc = (spawn as any).mock.results[0].value;
@@ -400,6 +440,16 @@ describe("streamViaCli", () => {
     // End stdout to allow readline loop to finish and prevent hanging
     proc.stdout.end();
     await vi.advanceTimersByTimeAsync(100);
+
+    // One typed cancellation, not a successful end
+    const terminals = stream._events.filter(
+      (e: any) => e.type === "done" || e.type === "error",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].reason).toBe("aborted");
+    expect(terminals[0].error.stopReason).toBe("aborted");
+    expect(terminals[0].error.errorMessage).toBeTruthy();
+    expect(stream.end).toHaveBeenCalledTimes(1);
   });
 
   it("routes control_request through handleControlRequest and writes response to stdin", async () => {
@@ -935,12 +985,66 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent).toBeDefined();
-      expect(doneEvent.message.content).toBeDefined();
-      expect(mockStream.end).toHaveBeenCalled();
+      expectOneTypedError(mockStream, "spawn ENOENT");
+    });
+
+    it("ends with a typed error whose error is an assistant message when setup throws", async () => {
+      (spawn as any).mockImplementationOnce(() => {
+        throw new Error("spawn exploded");
+      });
+
+      streamViaCli(mockModels[0] as any, {
+        messages: [{ role: "user", content: "Hello" }],
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      const mockStream = MockAssistantMessageEventStream.mock.instances[0];
+      expectOneTypedError(mockStream, "spawn exploded");
+    });
+
+    it("keeps partial text and usage when the process exits nonzero after partial output", async () => {
+      streamViaCli(mockModels[0] as any, {
+        messages: [{ role: "user", content: "Hello" }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const proc = (spawn as any).mock.results[0].value;
+
+      for (const line of [
+        {
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: { usage: { input_tokens: 7, output_tokens: 0 } },
+          },
+        },
+        {
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+        },
+        {
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "Partial" },
+          },
+        },
+      ]) {
+        proc.stdout.write(JSON.stringify(line) + "\n");
+      }
+      await vi.advanceTimersByTimeAsync(10);
+      proc.emit("close", 1, null);
+      proc.stdout.end();
+      await vi.advanceTimersByTimeAsync(100);
+
+      const mockStream = MockAssistantMessageEventStream.mock.instances[0];
+      const message = expectOneTypedError(mockStream, "exited");
+      expect(JSON.stringify(message.content)).toContain("Partial");
+      expect(message.usage.input).toBe(7);
     });
 
     it("pushes error event when subprocess crashes with non-zero exit code", async () => {
@@ -960,12 +1064,7 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent).toBeDefined();
-      expect(doneEvent.message.content).toBeDefined();
-      expect(mockStream.end).toHaveBeenCalled();
+      expectOneTypedError(mockStream, "code 1");
     });
 
     it("includes stderr in error event on crash", async () => {
@@ -986,11 +1085,7 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent).toBeDefined();
-      expect(doneEvent.message.content).toBeDefined();
+      expectOneTypedError(mockStream, "segfault in libfoo.so");
     });
 
     it("reports an error when subprocess is killed by a signal before any output", async () => {
@@ -1010,11 +1105,7 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent).toBeDefined();
-      expect(JSON.stringify(doneEvent.message.content)).toContain("SIGKILL");
+      expectOneTypedError(mockStream, "SIGKILL");
     });
 
     it("does not push error on normal close (code 0)", async () => {
@@ -1028,7 +1119,7 @@ describe("streamViaCli", () => {
 
       const proc = (spawn as any).mock.results[0].value;
 
-      // Write result to stdout then close with code 0
+      // Write a complete reply and result to stdout then close with code 0
       const lines = [
         JSON.stringify({
           type: "stream_event",
@@ -1036,6 +1127,30 @@ describe("streamViaCli", () => {
             type: "message_start",
             message: { usage: { input_tokens: 10, output_tokens: 0 } },
           },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "ok" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
         }),
         JSON.stringify({
           type: "stream_event",
@@ -1141,11 +1256,7 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(180_000);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent).toBeDefined();
-      expect(doneEvent.message.content).toBeDefined();
+      expectOneTypedError(mockStream, "timed out");
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
 
       // Clean up - end stdout so readline closes
@@ -1183,19 +1294,16 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(170_000);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent).toBeUndefined();
+      expect(
+        mockStream._events.filter(
+          (e: any) => e.type === "done" || e.type === "error",
+        ),
+      ).toHaveLength(0);
 
       // Advance 10 more seconds (180s since last line) -- NOW should timeout
       await vi.advanceTimersByTimeAsync(10_000);
 
-      const doneEvent2 = mockStream._events.find(
-        (e: any) => e.type === "done" && e.message,
-      );
-      expect(doneEvent2).toBeDefined();
-      expect(doneEvent2.message.content).toBeDefined();
+      expectOneTypedError(mockStream, "timed out");
 
       // Clean up
       proc.stdout.end();
@@ -1213,7 +1321,7 @@ describe("streamViaCli", () => {
 
       const proc = (spawn as any).mock.results[0].value;
 
-      // Write normal result to stdout
+      // Write a complete reply and normal result to stdout
       const lines = [
         JSON.stringify({
           type: "stream_event",
@@ -1221,6 +1329,30 @@ describe("streamViaCli", () => {
             type: "message_start",
             message: { usage: { input_tokens: 10, output_tokens: 0 } },
           },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "ok" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
         }),
         JSON.stringify({
           type: "stream_event",
@@ -1292,7 +1424,8 @@ describe("streamViaCli", () => {
 
       expect(spawn).not.toHaveBeenCalled();
       expect(stream.end).toHaveBeenCalledTimes(1);
-      expect(stream._events.at(-1).type).toBe("done");
+      expect(stream._events.at(-1).type).toBe("error");
+      expect(stream._events.at(-1).reason).toBe("aborted");
     });
 
     it("does not spawn when aborted while the relay is starting", async () => {
@@ -1309,7 +1442,8 @@ describe("streamViaCli", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(spawn).not.toHaveBeenCalled();
-      expect(stream._events.at(-1).type).toBe("done");
+      expect(stream._events.at(-1).type).toBe("error");
+      expect(stream._events.at(-1).reason).toBe("aborted");
     });
   });
 
@@ -1493,10 +1627,11 @@ describe("streamViaCli", () => {
       vi.advanceTimersByTime(500);
 
       const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-      const doneEvent = mockStream._events.find((e: any) => e.type === "done");
-      expect(doneEvent).toBeDefined();
-      // Should not crash — stopReason should be "stop" (end_turn maps to stop)
-      expect(doneEvent.reason).toBe("stop");
+      // Should not crash; a completed message with no content is an empty
+      // reply, not a successful stop
+      const message = expectOneTypedError(mockStream, "empty reply");
+      expect(message.content).toEqual([]);
+      expect(message.usage.input).toBe(10);
     });
 
     it("passes through length stopReason unchanged", async () => {

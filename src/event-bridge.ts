@@ -1,5 +1,5 @@
-import type { ClaudeApiEvent, TrackedContentBlock } from "./types";
-import { calculateCost } from "@mariozechner/pi-ai";
+import type { ClaudeApiEvent, ClaudeUsage, TrackedContentBlock } from "./types";
+import { calculateCost } from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEventStream,
@@ -7,7 +7,7 @@ import type {
   TextContent,
   ThinkingContent,
   ToolCall,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import {
   mapClaudeToolNameToPi,
   translateClaudeArgsToPi,
@@ -40,23 +40,55 @@ type TrackedBlock = TrackedContentBlock | TrackedToolBlock;
 export interface EventBridge {
   handleEvent(event: ClaudeApiEvent): void;
   getOutput(): AssistantMessage;
+  /**
+   * Why the streamed message is not a complete supported response, or
+   * undefined once the top-level message, its blocks and stop reason all
+   * completed.
+   */
+  getIncompleteReason(): string | undefined;
 }
 
 /**
- * Map Claude API stop reasons to pi's stop reason format.
+ * Map Claude API stop reasons to pi's stop reason format. Unknown reasons
+ * map to undefined: they are not evidence of a successful stop.
  */
 function mapStopReason(
-  reason: string | undefined,
-): "stop" | "length" | "toolUse" {
+  reason: string,
+): "stop" | "length" | "toolUse" | undefined {
   switch (reason) {
     case "tool_use":
       return "toolUse";
     case "max_tokens":
       return "length";
     case "end_turn":
-    default:
+    case "stop_sequence":
       return "stop";
+    default:
+      return undefined;
   }
+}
+
+/**
+ * An empty assistant message for the model: no content, zero usage.
+ */
+export function createAssistantOutput(model: Model<any>): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content: [] as (TextContent | ThinkingContent | ToolCall)[],
+    api: "pi-claude-subscription",
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
 }
 
 /**
@@ -78,25 +110,16 @@ export function createEventBridge(
   const blocks: TrackedBlock[] = [];
 
   // The accumulated output message
-  const output: AssistantMessage = {
-    role: "assistant" as const,
-    content: [] as (TextContent | ThinkingContent | ToolCall)[],
-    api: "pi-claude-subscription",
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp: Date.now(),
-  };
+  const output = createAssistantOutput(model);
 
   let started = false;
+
+  // Completion evidence: the provider succeeds only on all of it
+  let messageStopped = false;
+  let rawStopReason: string | undefined;
+  let stopReasonKnown = false;
+  let openBlocks = 0;
+  let unparseableTool: string | undefined;
 
   function handleEvent(event: ClaudeApiEvent): void {
     // Emit start event on first message — tells pi to begin incremental rendering
@@ -128,19 +151,42 @@ export function createEventBridge(
     }
   }
 
+  /**
+   * Record the reported 1-hour cache-write subset. Without a breakdown the
+   * tier is unknown, so the previous value (or the 5-minute fallback) stands.
+   */
+  function applyCacheBreakdown(usage: ClaudeUsage): void {
+    const longWrite = usage.cache_creation?.ephemeral_1h_input_tokens;
+    if (longWrite != null) output.usage.cacheWrite1h = longWrite;
+  }
+
+  /**
+   * Recompute total tokens and cost. The SDK's calculateCost prices
+   * usage.cacheWrite1h at 2x input and the rest at the cacheWrite rate.
+   */
+  function recalculateUsage(): void {
+    output.usage.totalTokens =
+      output.usage.input +
+      output.usage.output +
+      output.usage.cacheRead +
+      output.usage.cacheWrite;
+    calculateCost(model, output.usage);
+  }
+
   function handleMessageStart(event: ClaudeApiEvent): void {
+    // A new top-level message must complete on its own
+    messageStopped = false;
+    rawStopReason = undefined;
+    stopReasonKnown = false;
+
     const usage = event.message?.usage;
     if (usage) {
       output.usage.input = usage.input_tokens ?? 0;
       output.usage.output = usage.output_tokens ?? 0;
       output.usage.cacheRead = usage.cache_read_input_tokens ?? 0;
       output.usage.cacheWrite = usage.cache_creation_input_tokens ?? 0;
-      output.usage.totalTokens =
-        output.usage.input +
-        output.usage.output +
-        output.usage.cacheRead +
-        output.usage.cacheWrite;
-      calculateCost(model, output.usage);
+      applyCacheBreakdown(usage);
+      recalculateUsage();
     }
   }
 
@@ -154,6 +200,7 @@ export function createEventBridge(
         index: event.index ?? 0,
       };
       blocks.push(block);
+      openBlocks++;
       output.content.push({ type: "text" as const, text: "" });
 
       stream.push({
@@ -168,6 +215,7 @@ export function createEventBridge(
         index: event.index ?? 0,
       };
       blocks.push(block);
+      openBlocks++;
       output.content.push({
         type: "thinking" as const,
         thinking: "",
@@ -198,6 +246,7 @@ export function createEventBridge(
         partialJson: "",
       };
       blocks.push(block);
+      openBlocks++;
       output.content.push({
         type: "toolCall" as const,
         id,
@@ -304,6 +353,7 @@ export function createEventBridge(
     const block = blocks[idx];
     // Clean up the tracking index from the block (no longer needed)
     delete (block as any).index;
+    openBlocks--;
 
     if (block.type === "text") {
       stream.push({
@@ -320,22 +370,24 @@ export function createEventBridge(
         partial: output,
       });
     } else if (block.type === "tool_use") {
-      // Final JSON parse with fallback to raw string
-      let finalArgs: Record<string, unknown> | string;
+      // Final JSON parse. A tool with no input streams no JSON at all.
+      let finalArgs: Record<string, unknown>;
       try {
-        const parsed = JSON.parse(block.partialJson);
+        const parsed = JSON.parse(block.partialJson || "{}");
+        if (typeof parsed !== "object" || !parsed || Array.isArray(parsed))
+          throw new Error("tool input is not an object");
         finalArgs = translateClaudeArgsToPi(block.claudeName, parsed);
       } catch {
-        finalArgs = block.partialJson;
+        // Not a completed tool call: keep the last valid observed arguments
+        // and leave the request to fail, without a toolcall_end
+        unparseableTool ??= block.name;
+        return;
       }
 
       // Update output.content with final arguments
       const contentBlock = output.content[idx] as ToolCall;
-      (contentBlock as any).arguments = finalArgs;
+      contentBlock.arguments = finalArgs as ToolCall["arguments"];
 
-      // ToolCall.arguments is typed as Record<string, any> in pi-ai, but we
-      // intentionally emit a raw string when JSON parse fails completely.
-      // Pi handles string arguments gracefully at runtime.
       const toolCall = {
         type: "toolCall" as const,
         id: block.id,
@@ -354,7 +406,10 @@ export function createEventBridge(
 
   function handleMessageDelta(event: ClaudeApiEvent): void {
     if (event.delta?.stop_reason) {
-      output.stopReason = mapStopReason(event.delta.stop_reason);
+      rawStopReason = event.delta.stop_reason;
+      const mapped = mapStopReason(rawStopReason);
+      stopReasonKnown = mapped !== undefined;
+      if (mapped) output.stopReason = mapped;
     }
 
     const usage = event.usage;
@@ -362,22 +417,37 @@ export function createEventBridge(
       if (usage.input_tokens != null) output.usage.input = usage.input_tokens;
       if (usage.output_tokens != null)
         output.usage.output = usage.output_tokens;
-      output.usage.totalTokens =
-        output.usage.input +
-        output.usage.output +
-        output.usage.cacheRead +
-        output.usage.cacheWrite;
-      calculateCost(model, output.usage);
+      if (usage.cache_read_input_tokens != null)
+        output.usage.cacheRead = usage.cache_read_input_tokens;
+      if (usage.cache_creation_input_tokens != null)
+        output.usage.cacheWrite = usage.cache_creation_input_tokens;
+      applyCacheBreakdown(usage);
+      recalculateUsage();
     }
   }
 
   function handleMessageStop(): void {
-    // No-op: done event is pushed by the provider after readline closes.
-    // Pushing done here (synchronously) prevents pi from executing tools.
+    // Only records completion: done event is pushed by the provider after
+    // readline closes. Pushing done here (synchronously) prevents pi from
+    // executing tools.
+    messageStopped = true;
+  }
+
+  function getIncompleteReason(): string | undefined {
+    if (!messageStopped)
+      return "the response ended before the message completed";
+    if (openBlocks > 0) return "a content block did not complete";
+    if (unparseableTool)
+      return `the ${unparseableTool} tool call had unparseable arguments`;
+    if (rawStopReason === undefined)
+      return "the message completed without a stop reason";
+    if (!stopReasonKnown) return `unsupported stop reason "${rawStopReason}"`;
+    return undefined;
   }
 
   return {
     handleEvent,
     getOutput: () => output,
+    getIncompleteReason,
   };
 }

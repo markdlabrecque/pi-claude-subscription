@@ -7,10 +7,13 @@ import { defineConfig, globalIgnores } from "eslint/config";
 export default defineConfig([
   globalIgnores([
     "node_modules/",
+    ".claude/worktrees/",
     "dist/",
     "coverage/",
     "package/",
     "test-mcp-control.cjs",
+    // Third-party fixture kept byte-for-byte as upstream wrote it.
+    "tests/fixtures/pi-manage-todo-list/",
   ]),
   eslint.configs.recommended,
   tseslint.configs.recommended,

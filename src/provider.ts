@@ -13,16 +13,20 @@
  * 7. Implements break-early: kills subprocess at message_stop when any
  *    tool_use block was seen, so pi runs the tools
  * 8. Hardened lifecycle: inactivity and per-request timeouts, subprocess exit
- *    handler, streamEnded guard, abort via SIGKILL, process registry
+ *    handler, one typed terminal result per request, abort reported as a
+ *    typed cancellation before a SIGKILL, process registry
  * 9. Falls back from resume to replay when the session is gone
  */
 
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
-  AssistantMessageEventStream,
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type AssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import {
   buildPrompt,
   buildReplayPrompt,
@@ -42,7 +46,7 @@ import {
   getRequestTimeoutMs,
 } from "./process-manager.js";
 import { parseLine } from "./stream-parser.js";
-import { createEventBridge } from "./event-bridge.js";
+import { createAssistantOutput, createEventBridge } from "./event-bridge.js";
 import {
   startRelay,
   describeFailure,
@@ -53,6 +57,13 @@ import { removeMcpConfig } from "./mcp-config.js";
 import { handleControlRequest } from "./control-handler.js";
 import { mapThinkingEffort } from "./thinking-config.js";
 import { getSessionMode } from "./session-mode.js";
+import { normalizeCliEnvironment } from "./isolation.js";
+import { isDebugEnabled } from "./debug-log.js";
+import { resolveEnv } from "./env-flag.js";
+import {
+  startRequestDiagnostics,
+  type TerminalReason,
+} from "./request-diagnostics.js";
 /** Inactivity timeout: kill subprocess if no stdout for 180 seconds (3 minutes). */
 const INACTIVITY_TIMEOUT_MS = 180_000;
 
@@ -77,8 +88,8 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
  * Claude CLI can auto-execute the tools.
  *
  * Hardened with: inactivity timeout (180s), subprocess exit handler with stderr
- * surfacing, streamEnded guard against double errors, abort via SIGKILL, and
- * process registry integration for teardown cleanup.
+ * surfacing, a request-wide guard against a second terminal result, abort via
+ * SIGKILL, and process registry integration for teardown cleanup.
  *
  * @param model - The model to use (from pi's model catalog)
  * @param context - The conversation context with messages and system prompt
@@ -95,9 +106,60 @@ export function streamViaCli(
   },
   options?: StreamViaCLiOptions,
 ): AssistantMessageEventStream {
-  // @ts-expect-error — tsc can't verify AssistantMessageEventStream is a value
-  // through pi-ai's `export *` re-export chain. The class constructor exists at runtime.
-  const stream = new AssistantMessageEventStream();
+  const stream = createAssistantMessageEventStream();
+  // Settings, relay upstream and CLI environment all come from this one
+  // request-local view; process.env is never written
+  const env = resolveEnv(options?.env);
+
+  // One terminal result per request, across both attempts: the first wins
+  let ended = false;
+
+  /**
+   * End the request as a typed error. The message keeps any partial content
+   * and measured usage; errorMessage carries the diagnostic.
+   */
+  const endWithError = (output: AssistantMessage, errorMessage: string) => {
+    if (ended) return;
+    ended = true;
+    stream.push({
+      type: "error",
+      reason: "error",
+      error: { ...output, stopReason: "error", errorMessage },
+    });
+    stream.end();
+  };
+
+  /**
+   * End the request as cancelled by Pi. The message keeps any partial
+   * content and measured usage.
+   */
+  const endWithAbort = (output: AssistantMessage) => {
+    if (ended) return;
+    ended = true;
+    stream.push({
+      type: "error",
+      reason: "aborted",
+      error: {
+        ...output,
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      },
+    });
+    stream.end();
+  };
+
+  /** End the request successfully with the accumulated message. */
+  const endWithDone = (output: AssistantMessage) => {
+    if (ended) return;
+    ended = true;
+    stream.push({
+      type: "done",
+      // The bridge only ever sets these three
+      reason: output.stopReason as "stop" | "length" | "toolUse",
+      message: output,
+    });
+    stream.end();
+  };
 
   /**
    * One CLI attempt. Resolves true when a resumed session was missing or
@@ -110,41 +172,57 @@ export function streamViaCli(
     // The CLI refused to start a request because no login is stored
     let notLoggedIn = false;
     let stopRequestTimer: (() => void) | undefined;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+    let closeLines: (() => void) | undefined;
+    // Releases a wait on Pi's stream observer, so cancel can't be held by it
+    let interruptQueue: (() => void) | undefined;
+    // Set once break-early kills the subprocess; guards buffered readline lines
+    let broken = false;
+    // Set once the CLI reports its result; a later kill is our own cleanup
+    let resultSeen = false;
+    // What happened to this request, for the debug diagnostics record
+    let diagnostics: ReturnType<typeof startRequestDiagnostics> | undefined;
+    // The bridge's accumulated message, so a thrown failure still keeps it
+    let output: AssistantMessage | undefined;
+    const seen = {
+      messageStart: false,
+      messageStop: false,
+      resultError: false,
+      cancelled: false,
+      timedOut: false,
+      inactive: false,
+      resumeLost: false,
+      threw: false,
+    };
 
     try {
-      const cwd = options?.cwd ?? process.cwd();
+      const bridge = createEventBridge(stream, model, getPiToolNames(context));
+      output = bridge.getOutput();
 
-      // End the stream before anything is spawned
-      const endWithoutCli = (text?: string) => {
-        const output = createEventBridge(stream, model).getOutput();
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: {
-            ...output,
-            ...(text && { content: [{ type: "text", text }] }),
-          },
-        });
-        stream.end();
-      };
+      // Cancellation settles the request first, then tears down whatever
+      // has started; later callbacks find the request already ended
+      if (options?.signal) {
+        abortHandler = () => {
+          // A request that already ended keeps its own outcome
+          if (!ended) seen.cancelled = true;
+          endWithAbort(bridge.getOutput());
+          interruptQueue?.();
+          if (proc) forceKillProcess(proc);
+          closeLines?.();
+        };
 
-      // Pi already cancelled: nothing to start
-      if (options?.signal?.aborted) {
-        endWithoutCli();
-        return false;
-      }
-
-      // Reject attachments the CLI path cannot carry, before spawning anything
-      const unsupported = findUnsupportedAttachment(context.messages);
-      if (unsupported) {
-        endWithoutCli(`Error: ${unsupported}`);
-        return false;
+        // Pi already cancelled: nothing to start
+        if (options.signal.aborted) {
+          abortHandler();
+          return false;
+        }
+        options.signal.addEventListener("abort", abortHandler, { once: true });
       }
 
       // Stop a model stuck re-issuing the same failing tool call
       const repeated = findRepeatedToolFailure(context.messages);
       if (repeated) {
-        endWithoutCli(`Error: ${repeated}`);
+        endWithError(output, repeated);
         return false;
       }
 
@@ -154,7 +232,7 @@ export function streamViaCli(
       // creates the session and later turns --resume it. Only an assistant
       // message indicates a prior turn, not the total transcript length
       // (pi includes system messages on the first turn).
-      const replay = forceReplay || getSessionMode() === "replay";
+      const replay = forceReplay || getSessionMode(env) === "replay";
       const resumeSessionId =
         !replay &&
         options?.sessionId &&
@@ -162,13 +240,23 @@ export function streamViaCli(
           ? options.sessionId
           : undefined;
 
+      // Reject attachments this request cannot carry, before spawning anything
+      const unsupported = findUnsupportedAttachment(
+        context.messages,
+        !!resumeSessionId,
+      );
+      if (unsupported) {
+        endWithError(output, unsupported);
+        return false;
+      }
+
       // When resuming, only send the latest user turn
       const prompt = replay
         ? buildReplayPrompt(context)
         : resumeSessionId
           ? buildResumePrompt(context)
           : buildPrompt(context);
-      const systemPrompt = buildSystemPrompt(context, cwd, replay);
+      const systemPrompt = buildSystemPrompt(context, replay);
 
       // Compute effort level from reasoning options
       const effort = mapThinkingEffort(
@@ -177,12 +265,23 @@ export function streamViaCli(
         options?.thinkingBudgets,
       );
 
-      // One-request relay between the CLI and Anthropic
-      relay = await startRelay();
+      if (isDebugEnabled()) diagnostics = startRequestDiagnostics();
+
+      // One-request relay between the CLI and Anthropic. Pi's request and
+      // response hooks run there, on the actual request and response.
+      const { onPayload, onResponse } = options ?? {};
+      relay = await startRelay({
+        upstream: env.ANTHROPIC_BASE_URL,
+        onPayload: (payload) => {
+          normalizeCliEnvironment(payload);
+          return onPayload?.(payload, model);
+        },
+        onResponse: onResponse && ((response) => onResponse(response, model)),
+      });
 
       // Pi may have cancelled while the relay was starting: don't spawn
       if (options?.signal?.aborted) {
-        endWithoutCli();
+        endWithAbort(output);
         return false;
       }
 
@@ -196,6 +295,7 @@ export function streamViaCli(
           !replay && !resumeSessionId ? options?.sessionId : undefined,
         stateless: replay,
         baseUrl: relay.url,
+        env,
       });
       const getStderr = captureStderr(proc);
 
@@ -205,72 +305,55 @@ export function streamViaCli(
       // Write user message to subprocess stdin
       writeUserMessage(proc, prompt);
 
-      // Create event bridge (before endStreamWithError so bridge is in scope)
-      const bridge = createEventBridge(
-        stream,
-        model,
-        getPiToolNames(context),
-      );
-
-      // Guard against double stream.end() and double error events.
-      // First error path wins; subsequent ones are no-ops.
-      let streamEnded = false;
-      // Set once break-early kills the subprocess; guards buffered readline lines
-      let broken = false;
-      // Set once the CLI reports its result; a later kill is our own cleanup
-      let resultSeen = false;
+      // Pi's provider stream observer. With one, each top-level CLI stream
+      // event waits for it before the bridge sees it, so lines (and the exit)
+      // are handled in arrival order through `queue`.
+      const observe = options?.onProviderStreamEvent;
+      let observerFailure: string | undefined;
+      let queue: Promise<void> = Promise.resolve();
+      // Settles on cancel or timeout, so a stuck observer can't hold cleanup
+      let interrupt!: () => void;
+      const interrupted = new Promise<void>((resolve) => (interrupt = resolve));
+      interruptQueue = interrupt;
+      const inOrder = (handle: () => void | Promise<void>) => {
+        if (!observe) return void handle();
+        queue = queue
+          .then(() => (seen.cancelled || ended ? undefined : handle()))
+          .catch((err) => {
+            observerFailure ??= `Provider stream event hook failed: ${err instanceof Error ? err.message : String(err)}`;
+            forceKillProcess(proc!);
+            endStreamWithError(observerFailure);
+          });
+      };
+      const drained = () => Promise.race([queue, interrupted]);
 
       /**
-       * End the stream with an error, using a "done" event instead of "error".
-       *
-       * Why "done" not "error": AssistantMessageEventStream.extractResult()
-       * returns event.error (a string) for error events, but agent-loop.js
-       * then calls message.content.filter() on the result, crashing because
-       * a string has no .content property. By pushing "done" with a valid
-       * AssistantMessage (content:[]), pi gets a well-formed object.
+       * End the request as a typed error, after any partial content. Upstream
+       * and login failures use their mapped diagnostic, so Pi can retry the
+       * retryable ones and stop on the others.
        */
       function endStreamWithError(errMsg: string) {
-        if (streamEnded || broken) return;
-        streamEnded = true;
-        const output = bridge.getOutput();
-        const failure: UpstreamFailure | undefined =
-          relay?.failure ?? (notLoggedIn ? { status: 401 } : undefined);
-        if (failure) {
-          // Upstream and login failures end as a real error, so Pi can retry
-          // the retryable ones and stop on the others.
-          stream.push({
-            type: "error",
-            reason: "error",
-            error: {
-              ...output,
-              stopReason: "error",
-              errorMessage: describeFailure(failure),
-            },
-          } as any);
-          stream.end();
+        if (broken) return;
+        // A Pi hook failed or the relay refused the request: say so, as an error
+        const refused = relay?.requestFailure ?? observerFailure;
+        if (refused) {
+          endWithError(bridge.getOutput(), refused);
           return;
         }
-        const errorMessage = {
-          ...output,
-          content: output.content?.length
-            ? output.content
-            : [{ type: "text" as const, text: `Error: ${errMsg}` }],
-          stopReason: "stop" as const,
-        };
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: errorMessage,
-        } as any);
-        stream.end();
+        const failure: UpstreamFailure | undefined =
+          relay?.failure ?? (notLoggedIn ? { status: 401 } : undefined);
+        endWithError(
+          bridge.getOutput(),
+          failure ? describeFailure(failure) : errMsg,
+        );
       }
 
       // Inactivity timeout: kill subprocess if no stdout for INACTIVITY_TIMEOUT_MS
-      let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
-
       function resetInactivityTimer() {
         if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(() => {
+          seen.inactive = true;
+          interrupt();
           forceKillProcess(proc!);
           endStreamWithError(
             `Claude CLI subprocess timed out: no output for ${INACTIVITY_TIMEOUT_MS / 1000} seconds`,
@@ -279,8 +362,10 @@ export function streamViaCli(
       }
 
       // Per-request timeout: kill the whole process tree, then end as usual
-      const requestTimeoutMs = getRequestTimeoutMs();
+      const requestTimeoutMs = getRequestTimeoutMs(env);
       const requestTimer = setTimeout(() => {
+        seen.timedOut = true;
+        interrupt();
         forceKillProcess(proc!);
         endStreamWithError(
           `Claude CLI request timed out after ${requestTimeoutMs / 1000} seconds`,
@@ -288,22 +373,6 @@ export function streamViaCli(
       }, requestTimeoutMs);
       requestTimer.unref();
       stopRequestTimer = () => clearTimeout(requestTimer);
-
-      // Set up abort signal handler -- uses SIGKILL for immediate force-kill
-      if (options?.signal) {
-        abortHandler = () => {
-          if (proc) {
-            forceKillProcess(proc);
-          }
-        };
-
-        // Aborted while the relay started: the kill closes stdout and ends the stream
-        if (options.signal.aborted) abortHandler();
-        else
-          options.signal.addEventListener("abort", abortHandler, {
-            once: true,
-          });
-      }
 
       // Track tool_use blocks for break-early decision at message_stop
       let sawToolCall = false;
@@ -313,6 +382,7 @@ export function streamViaCli(
         crlfDelay: Infinity,
         terminal: false,
       });
+      closeLines = () => rl.close();
 
       // Handle process error -- use endStreamWithError for guard
       proc.on("error", (err: Error) => {
@@ -324,6 +394,10 @@ export function streamViaCli(
       // Handle subprocess close -- surface crashes with stderr and exit code
       proc.on("close", (code: number | null, signal: string | null) => {
         clearTimeout(inactivityTimer);
+        // After any lines still waiting on the observer
+        inOrder(() => onClose(code, signal));
+      });
+      const onClose = (code: number | null, signal: string | null) => {
         if (broken) return; // Break-early kill, expected
         if (code === null) {
           // Killed by a signal: not an abort or our own cleanup, so report it
@@ -342,7 +416,7 @@ export function streamViaCli(
             : `Claude CLI exited unexpectedly with code ${code}`;
           endStreamWithError(message);
         }
-      });
+      };
 
       // A resumed session that is gone or unreadable fails before any output
       // and before any request upstream (a replay must not be a second one)
@@ -360,9 +434,16 @@ export function streamViaCli(
       // iterator batches lines, breaking real-time streaming to pi.
       rl.on("line", (line: string) => {
         if (broken) return; // Guard: ignore buffered lines after break-early
+        // A settled request's terminal message must not change
+        if (ended) return;
 
         // Reset inactivity timer on each line of output
         resetInactivityTimer();
+
+        inOrder(() => handleLine(line));
+      });
+      const handleLine = async (line: string) => {
+        if (broken) return; // A queued line after break-early
 
         const msg = parseLine(line);
         if (!msg) return;
@@ -371,7 +452,14 @@ export function streamViaCli(
           // Only forward top-level events to pi's event bridge.
           // Sub-agent events (parent_tool_use_id !== null) are internal to the CLI.
           const isTopLevel = !(msg as any).parent_tool_use_id;
+          // Pi's observer sees the parsed CLI event before the bridge does
+          if (isTopLevel && observe) {
+            await observe(msg.event, model);
+            if (broken || seen.cancelled || ended) return;
+          }
           if (isTopLevel) {
+            if (msg.event.type === "message_start") seen.messageStart = true;
+            if (msg.event.type === "message_stop") seen.messageStop = true;
             bridge.handleEvent(msg.event);
           }
 
@@ -400,6 +488,7 @@ export function streamViaCli(
           handleControlRequest(msg, proc!.stdin!);
         } else if (msg.type === "result") {
           resultSeen = true;
+          seen.resultError = !!msg.is_error || msg.subtype.startsWith("error");
           if (msg.is_error && NOT_LOGGED_IN.test(msg.result ?? "")) {
             notLoggedIn = true;
             endStreamWithError(msg.result!);
@@ -415,89 +504,128 @@ export function streamViaCli(
           cleanupProcess(proc!);
           rl.close();
         }
-      });
+      };
 
-      // Wait for readline to close (result received or process ended)
+      // Wait for readline to close (result received or process ended), then
+      // for lines still queued behind the observer
       await new Promise<void>((resolve) => {
         rl.on("close", resolve);
       });
+      await drained();
 
-      // stdout can close before the exit code and stderr are in
-      if (!streamEnded && !resultSeen && !bridge.getOutput().content?.length) {
+      // stdout can close before the exit code and stderr are in, with or
+      // without partial output
+      if (!ended && !resultSeen && !broken) {
         await new Promise<void>((resolve) =>
           proc!.exitCode !== null || proc!.signalCode != null
             ? resolve()
             : proc!.once("close", resolve),
         );
-        if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr()))
+        await drained();
+        if (resumeSessionId && proc.exitCode !== 0 && resumeLost(getStderr())) {
+          seen.resumeLost = true;
           return true;
+        }
       }
 
       // Push done event after readline closes (async). Pushing synchronously
       // inside handleMessageStop prevents pi from executing tools.
-      // Guard with streamEnded to avoid pushing done after an error was already pushed.
-      if (
-        !streamEnded &&
-        relay.failure &&
-        !bridge.getOutput().content?.length
-      ) {
-        endStreamWithError("");
-      }
-      if (!streamEnded) {
-        const output = bridge.getOutput();
+      // The terminal guard drops these once an error was already reported.
+      // A known upstream failure or refused request is reported even after
+      // partial content.
+      if (relay.failure || relay.requestFailure) endStreamWithError("");
 
-        // A thinking-only reply (no text, no tool call) leaves Pi with nothing
-        // to act on; the empty-signature thinking block can't be replayed
-        // either. End it as a real error so Pi can retry or report it.
-        const blocks = output.content ?? [];
-        const onlyEmptyThinking =
-          blocks.length > 0 &&
-          blocks.every(
-            (b: any) =>
-              b.type === "thinking" &&
-              !b.thinking &&
-              !b.thinkingSignature,
-          );
-        if (onlyEmptyThinking) {
-          streamEnded = true;
-          stream.push({
-            type: "error",
-            reason: "error",
-            error: {
-              ...output,
-              content: [],
-              stopReason: "error",
-              errorMessage:
-                "Claude returned an empty reply (thinking only, no text or tool call).",
-            },
-          } as any);
-          stream.end();
-          return false;
-        }
-
-        streamEnded = true;
-        stream.push({
-          type: "done",
-          // The bridge only ever sets these three
-          reason: output.stopReason as "stop" | "length" | "toolUse",
-          message: output,
-        });
-        stream.end();
+      // A thinking-only reply (no text, no tool call) leaves Pi with nothing
+      // to act on; the empty-signature thinking block can't be replayed
+      // either. End it as a real error so Pi can retry or report it.
+      const blocks = output.content ?? [];
+      const onlyEmptyThinking =
+        blocks.length > 0 &&
+        blocks.every(
+          (b: any) =>
+            b.type === "thinking" && !b.thinking && !b.thinkingSignature,
+        );
+      if (onlyEmptyThinking) {
+        endWithError(
+          { ...output, content: [] },
+          "Claude returned an empty reply (thinking only, no text or tool call).",
+        );
+        return false;
       }
+
+      // Success needs a complete supported streamed message, not a clean
+      // exit or a nominal CLI result
+      const incomplete = bridge.getIncompleteReason();
+      if (incomplete) {
+        endWithError(output, `Claude CLI protocol error: ${incomplete}.`);
+        return false;
+      }
+      const replied = blocks.some((b: any) =>
+        b.type === "text"
+          ? !!b.text
+          : b.type === "thinking"
+            ? !!b.thinking || !!b.thinkingSignature
+            : b.type === "toolCall",
+      );
+      if (!replied) {
+        endWithError(
+          output,
+          "Claude returned an empty reply (no text, thinking or tool call).",
+        );
+        return false;
+      }
+
+      endWithDone(output);
     } catch (err: any) {
-      stream.push({
-        type: "error",
-        reason: "error",
-        error: err.message ?? "Unexpected error in streamViaCli",
-      } as any);
-      stream.end();
+      seen.threw = true;
+      endWithError(
+        output ?? createAssistantOutput(model),
+        err?.message || "Unexpected error in streamViaCli",
+      );
+      // Setup failed after the CLI started: nothing else will reap it
+      if (proc) forceKillProcess(proc);
+      closeLines?.();
     } finally {
       stopRequestTimer?.();
+      clearTimeout(inactivityTimer);
       // Clean up abort listener
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);
       }
       await relay?.stop();
+      // Written once the CLI exits, without holding up the stream or a retry
+      if (diagnostics) {
+        const ended = relay;
+        const reason = (
+          exitCode: number | null,
+          signal: string | null,
+        ): TerminalReason => {
+          if (seen.threw) return "error";
+          if (seen.cancelled) return "cancelled";
+          if (seen.timedOut) return "timed-out";
+          if (seen.inactive) return "inactivity-timeout";
+          if (seen.resumeLost) return "resume-lost";
+          if (broken) return "tool-use";
+          if (ended?.failure) return "upstream-error";
+          if (resultSeen)
+            return seen.resultError ? "result-error" : "completed";
+          if (exitCode === 0)
+            return seen.messageStart ? "exit-without-result" : "empty-exit";
+          if (exitCode !== null) return "cli-exit-error";
+          return signal ? "killed" : "error";
+        };
+        void diagnostics.finish(proc, (exitCode, signal) => ({
+          requestId: randomUUID(),
+          terminalReason: reason(exitCode, signal),
+          sawMessageStart: seen.messageStart,
+          sawMessageStop: seen.messageStop,
+          sawResult: resultSeen,
+          cancelled: seen.cancelled,
+          timedOut: seen.timedOut,
+          upstreamCount: ended?.upstreamCount ?? 0,
+          rejectedCount: ended?.rejectedCount ?? 0,
+        }));
+      }
     }
     return false;
   };

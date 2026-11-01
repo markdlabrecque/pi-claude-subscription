@@ -46,11 +46,23 @@ export function installFakeClaude(upstreamUrl: string): FakeClaude {
     `#!/bin/sh\nexec "${process.execPath}" "${join(__dirname, "fake-claude.cjs")}" "$@"\n`,
   );
   chmodSync(bin, 0o755);
+  // cross-spawn and Windows startup probes resolve the .cmd launcher.
+  writeFileSync(
+    join(dir, "claude.cmd"),
+    `@echo off\r\n"${process.execPath}" "${join(__dirname, "fake-claude.cjs")}" %*\r\n`,
+  );
 
   const saved = {
     PATH: process.env.PATH,
     ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
   };
+  // The suites use TMPDIR for request sandboxes. Node on Windows uses TEMP.
+  if (process.platform === "win32" && process.env.TMPDIR) {
+    process.env.TEMP = process.env.TMPDIR;
+    process.env.TMP = process.env.TMPDIR;
+  }
   process.env.PATH = `${dir}${delimiter}${saved.PATH}`;
   process.env.ANTHROPIC_BASE_URL = upstreamUrl;
 

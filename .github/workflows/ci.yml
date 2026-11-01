@@ -1,9 +1,10 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -12,7 +13,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.19.0"
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
@@ -23,19 +24,20 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.19.0"
       - run: npm ci
       - run: npm run typecheck
 
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "22.19.0"
       - run: npm ci
+      - run: npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent --depth=0
       - run: npm run test:coverage

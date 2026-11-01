@@ -1,8 +1,14 @@
 {
   "name": "pi-claude-subscription",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Pi coding agent extension that routes LLM calls through the Claude Code CLI",
   "main": "index.ts",
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "pi-package"
   ],
@@ -17,13 +23,18 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-ai": "^0.52.0",
-    "@mariozechner/pi-coding-agent": "^0.52.0"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
     "cross-spawn": "^7.0.6"
   },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@eslint/js": "^9.39.4",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.0.0",
@@ -52,6 +63,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check .",
+    "check-style": "eslint . && prettier --check .",
     "prepare": "husky"
   }
 }

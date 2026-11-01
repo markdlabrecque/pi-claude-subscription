@@ -265,6 +265,8 @@ describe("getPiToolNames", () => {
   });
 
   it("prefers context.tools when present", () => {
-    expect(getPiToolNames({ messages: [], tools: [{ name: "z" }] })).toEqual(["z"]);
+    expect(getPiToolNames({ messages: [], tools: [{ name: "z" }] })).toEqual([
+      "z",
+    ]);
   });
 });

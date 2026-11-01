@@ -12,24 +12,29 @@ The extension registers a custom pi provider, `pi-claude-subscription`. Each req
 
 This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` packages are no longer supported. We will not maintain a dual-version adapter or a 0.52 compatibility test suite. See [ADR-0001](docs/adr/0001-pi-1x-only-support.md) for the decision.
 
-The SDK migration is not complete. The current source and package metadata still use the 0.52 SDK, and known Pi 1.x gaps include instruction forwarding and current-request tool inventory. This decision does not certify the current release as Pi 1.x compatible. The migration must document the minimum supported and tested 1.x versions and verify them in CI before claiming support.
+The minimum supported Pi version is **1.4.0**. The exact tested SDK pair is `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`, pinned in development dependencies and the lockfile. Mandatory local-SDK tests cover startup model selection, registered text/tool requests, thinking mappings, API-key fallback, isolation and the one-request guard. CI runs the same suite on Node 22.19.0 across Linux and macOS. Local verification ran on Linux with Node 22.19.0 and 24.20.0; remote CI results are not implied. See [migration verification](docs/pi-1x-verification.md).
+
+Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. Known follow-ups are listed below.
 
 ## Requirements
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude auth login`; `claude` on PATH)
 - A Claude Pro or Max subscription
-- [Pi 1.x](https://github.com/earendil-works/pi), subject to the migration status above. Compatibility with GSD or other Pi-derived hosts is not implied.
+- [Pi 1.4.0 or later in the 1.x family](https://github.com/earendil-works/pi). Only SDK 1.4.0 is verified here; later versions require their own checks. Compatibility with GSD or other Pi-derived hosts is not implied.
+- Node.js 22.19.0 or later.
 - macOS or Linux. On Windows, use WSL.
 
 ## Setup
 
-After the Pi 1.x migration is verified, add to `~/.pi/agent/settings.json`:
+Install the supported host first, then install this checkout for the migrated code:
 
-```json
-{
-  "packages": ["npm:pi-claude-subscription"]
-}
+```bash
+npm install -g @earendil-works/pi-coding-agent@1.4.0
+npm ci
+pi install .
 ```
+
+Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings. The published `pi-claude-subscription@0.3.1` predates this migration; do not use it to verify the new SDK contract. No global Pi installation, real CLI or login is needed to run the tests.
 
 Then select a model via `/model` in the interactive UI. Haiku, Sonnet, Opus and Fable are listed under the `pi-claude-subscription` provider.
 
@@ -37,19 +42,62 @@ It can be installed alongside `pi-claude-cli`: the provider ID, API name and tem
 
 ## Settings
 
-- Thinking effort follows pi's thinking level (low, medium, high, max). Opus models use an elevated mapping.
+- Models come from the installed SDK's Anthropic catalog, with one latest entry per Haiku, Sonnet, Opus and Fable family. Catalog image limits, context/output limits and cost metadata are retained. Fable uses catalog metadata, not a synthetic alias.
+- Thinking levels respect catalog exclusions. Existing mappings remain: minimal/low use CLI low; medium/high use medium/high outside Opus; non-Opus xhigh uses high. Opus medium uses high and high/xhigh use max. Explicit max uses max only for a catalog model declaring max support; unknown models cannot gain max through a family-name substring. Off, when supported, and an unspecified level omit the CLI effort flag, not a promise to disable CLI thinking. Custom token budgets remain unsupported and produce a warning. These mappings were exercised with the fake CLI, using the effort flag vocabulary inspected from Claude Code 2.1.312 help, not live reasoning-quality tests.
 - The inactivity timeout is fixed at 180 seconds without CLI output.
 - Request timeout: a request is stopped after 10 minutes by default. Set `PI_CLAUDE_SUBSCRIPTION_TIMEOUT_MS` to a number of milliseconds to change it (invalid or non-positive values use the default). It is read on every request. On timeout, or when Pi cancels, the whole CLI process tree is killed (process group on macOS/Linux), and the temp directory and relay port are released.
 - API-key fallback: set `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK=1` (also `true`) to send requests through pi's normal Anthropic provider, billed to `ANTHROPIC_API_KEY`, for example when subscription limits run out. Unset it or set it to `0` to return to the subscription path. It is read on every request, so nothing needs reinstalling.
 - Session mode: `PI_CLAUDE_SUBSCRIPTION_SESSION_MODE=replay|resume`, default `replay`. `replay` sends the whole history, including tool calls and results, as one text block per message and leaves no CLI session state, so a session can finish in a fresh container. `resume` sends only the new turn and uses `--resume` on the CLI session files on disk. If the resumed session is missing or unreadable (the CLI exits with `No conversation found with session ID`), that turn falls back to `replay`, which leaves no session behind, so each later turn falls back again. It is read on every request.
-- Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request, and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive.
+- Environment precedence: a caller's provider-scoped `env` option overrides the process environment for that request only; empty scoped values fall through to the process value, as in pi-ai. It applies to the session mode, request timeout, API-key fallback flag and key, the relay's upstream (`ANTHROPIC_BASE_URL`) and the variables the CLI inherits. `process.env` is never changed. The CLI is still stripped of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_USE_*`, and the isolation variables, nonessential-traffic suppression and its loopback relay URL are always set last, so scoped values cannot override them. Supplying a key without `PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK` does not enable the fallback. The debug flag stays process-wide. The relay is Node's plain HTTP(S) client: proxy and custom TLS variables reach the CLI but are not applied to the relay's upstream connection, and only plain loopback upstreams are tested.
+- Logging: default logs contain no tokens, prompts or tool arguments, and request headers are never logged. Set `PI_CLAUDE_SUBSCRIPTION_DEBUG=1` (also `true`) for fuller logs: one extra line per relay request; one `request diagnostics` JSON line per CLI request with a request id, the reason it ended, the extension, Pi and Claude CLI versions, whether message start, message stop and the CLI result were seen, the exit code or signal, cancellation and timeout, and the relay's upstream and rejected counts; and the content of unparseable CLI output lines and malformed control requests, which can include prompt text or tool arguments. Treat debug logs as sensitive.
 
 ## Known limits
 
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
-- Images and documents are passed through, including documents in earlier turns, which are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit. Images in earlier turns become a text placeholder. Other attachment types are rejected with an error in the latest user message and dropped with a warning in earlier turns.
-- Extensions that edit the raw API request are not supported by this CLI-backed provider. Pi 1.x exposes provider instrumentation hooks, but the current implementation does not honor them or warn about unsupported request mutation. The migration must document supported observation hooks and warn where request-editing hooks cannot be honored. Native-provider parity is not promised.
+- Images (Pi's native `image` blocks) in the latest user message are passed through byte-identically. Documents in any user turn are passed through as provider-wire `document` blocks; Pi 1.x has no native document block, so this is wire behavior, not SDK support. Earlier documents are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit.
+- Anything else a request would have to send is rejected with a typed error before any CLI or upstream request, rather than dropped or replaced by a placeholder: images in earlier user messages or in tool results (including custom-tool results), malformed images (missing or empty base64 data or media type), and any other attachment type. In `resume` mode only what follows the last assistant turn is checked, since the resumed CLI session already holds the rest; when resume falls back to `replay`, the whole history is checked again.
+- Effective normalized system-instruction forwarding remains [#40](https://github.com/markdlabrecque/pi-claude-subscription/issues/40). Workspace guidance remains [#43](https://github.com/markdlabrecque/pi-claude-subscription/issues/43).
+- Current-request tool inventory and activation remain [#42](https://github.com/markdlabrecque/pi-claude-subscription/issues/42). The migration tests use a stable offered tool set, not changing or deferred inventories.
+- Truthful terminal failure/cancellation statuses remain [#41](https://github.com/markdlabrecque/pi-claude-subscription/issues/41). Existing cleanup tests do not certify all terminal statuses.
+- Extension compatibility is limited to the cases in [Extension compatibility](#extension-compatibility) ([#14](https://github.com/markdlabrecque/pi-claude-subscription/issues/14), [#52](https://github.com/markdlabrecque/pi-claude-subscription/issues/52)). Native-provider parity is not promised; see [Provider hooks](#provider-hooks) for what the CLI path does honor.
+- Cache-write pricing remains [#34](https://github.com/markdlabrecque/pi-claude-subscription/issues/34), and account-side billing verification remains [#35](https://github.com/markdlabrecque/pi-claude-subscription/issues/35). Cache optimization is deferred until [#39](https://github.com/markdlabrecque/pi-claude-subscription/issues/39), #40 and #42 are complete.
 - Native Windows is not supported. On Windows, use WSL.
+
+## Extension compatibility
+
+Tested with the installed `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` 1.4.0, and the `@earendil-works/pi-tui` copy those SDKs install, through the registered provider, a scripted fake Claude CLI and a fake upstream, on synthetic data. The fake CLI follows the stream-json and relay contract described in this README; CLI flags were last inspected on Claude Code 2.1.312, and the attachment wire pass-through was last measured live on 2.1.301 (see [Attachments](#attachments)). These are deterministic tests, not a new live run: no real CLI, subscription, API key or network was used.
+
+Third-party extension: [tintinweb/pi-manage-todo-list](https://github.com/tintinweb/pi-manage-todo-list) at commit [`2eb22d3b0c9dd981398d928c8edcc4afce202fa1`](https://github.com/tintinweb/pi-manage-todo-list/commit/2eb22d3b0c9dd981398d928c8edcc4afce202fa1), manifest version 0.4.0, MIT, copyright 2026 tintinweb. It is written independently of this repository and of the SDK examples. Its licence, manifest and five source files are kept byte-for-byte in `tests/fixtures/pi-manage-todo-list/`, with source URLs and sha256 checksums in `PROVENANCE.json`. Nothing is fetched, built or installed for it during tests, and lint and formatting skip it so it stays unmodified. The original `src/index.ts` is loaded through the SDK resource loader into an isolated session (temporary cwd, agent and config directories, in-memory settings and session, no personal or project resources). The tested tool is `manage_todo_list`. The upstream README recommends its successor `pi-tasks`; this pin was chosen because it is small enough to review in full, not as a recommendation. The SDK's `hello` example is still run as a smoke test only.
+
+| Case                                          | Tested behaviour                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Third-party tool through Pi's loop            | The fake CLI calls `manage_todo_list` with `{"operation":"read"}`. Pi maps the name and arguments, runs the tool in its own loop and records `No todos. Use write operation to create a todo list.` with details `{"operation":"read","todos":[]}`. The next Messages request carries that text, then the final reply arrives. Each call reports its usage. |
+| One request per provider call                 | Two provider calls in one agent run, one upstream Messages request each.                                                                                                                                                                                                                                                                                    |
+| Instructions (#40)                            | An appended Pi system-prompt marker reaches the `system` field of both requests.                                                                                                                                                                                                                                                                            |
+| Tool loadout (#42)                            | Only the active tool is offered, as `mcp__custom-tools__manage_todo_list`. A registered tool Pi has not activated is neither offered nor run.                                                                                                                                                                                                               |
+| Tool execution                                | The schema-only MCP server only advertises tools. Pi runs every tool call; Claude Code runs none.                                                                                                                                                                                                                                                           |
+| Provider environment (#50)                    | A provider-scoped `ANTHROPIC_BASE_URL` decides which upstream the relay uses.                                                                                                                                                                                                                                                                               |
+| `onPayload` / `before_provider_request` (#51) | An in-place `temperature` edit on the relayed Messages JSON reaches the fake upstream. See [Provider hooks](#provider-hooks).                                                                                                                                                                                                                               |
+| Image in the latest user message              | Passed through with bytes and media type unchanged.                                                                                                                                                                                                                                                                                                         |
+| Earlier user images, images in tool results   | Rejected before any CLI or upstream request, including custom-tool results. Checked in `replay`, in `resume`'s new turn and tool results, and when `resume` falls back to `replay`. A valid resumed session is not sent images it already holds.                                                                                                            |
+| Malformed image, unknown attachment type      | Rejected before any request. These inputs are checked at the provider's own defensive boundary; Pi's SDK does not produce them.                                                                                                                                                                                                                             |
+| Documents, latest or earlier user messages    | Passed through as provider-wire `document` blocks. Pi 1.x has no native document block, so this is wire behaviour, not SDK support.                                                                                                                                                                                                                         |
+
+Rejected attachments end the turn with the provider's typed error, through the same terminal path as other setup failures (#47); nothing is replaced with a placeholder or dropped with only a warning.
+
+Not tested or claimed: todo persistence across sessions, the `/todos` command, widgets or other UI rendering, other commands, hooks or UI extensions, arbitrary third-party extensions, header mutation, every 1.x release, and Pi-derived hosts such as GSD.
+
+## Provider hooks
+
+Tested with `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` 1.4.0, the registered provider, a fake Claude CLI and a fake upstream. No real account requests were made. The API-key fallback uses Pi's own Anthropic provider and is unchanged.
+
+| Pi hook                                           | CLI-path behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onPayload` / `before_provider_request`           | Called and awaited at the relay with the parsed JSON body of the one Messages request the CLI actually sends, and the model. In-place edits and a returned replacement are both forwarded, with Content-Length recomputed. A body that is not JSON or a hook that throws ends the request with an error, and cancelling while the hook is pending ends it as cancelled; neither forwards anything. Request headers, including authorization, are never passed to the hook. The CLI's later requests are refused before the hook.                                             |
+| `onResponse` / `after_provider_response`          | Called and awaited with the status and headers of the one forwarded upstream response, success or error, before its body reaches the CLI. Not called when no HTTP response exists: a request refused locally, a CLI that fails to start or log in, the relay's local `HEAD` reply, or a rejected second generation. A hook that throws ends the turn with an error naming it, and the body is not delivered; cancelling while it is pending ends the request promptly.                                                                                                       |
+| `onProviderStreamEvent` / `provider_stream_event` | Called and awaited, in arrival order, with each top-level `stream_event` the CLI prints on its NDJSON stdout, before Pi sees the normalized event. This is the CLI's parsed output, not a capture of the upstream SSE stream. Sub-agent events, malformed lines, control requests, `system` records and the CLI's result summary are not passed. Cancelling while the hook is pending ends the request without normalizing buffered output. A hook that throws stops the CLI and ends the turn with an error naming it; the failing event and later ones are not normalized. |
+
+Edits made at the relay are not reflected in Pi's transcript or in Claude Code's own session history, so a `resume` turn continues from what the CLI recorded and a `replay` turn rebuilds from Pi's transcript. Prefer Pi's instruction, history and tool contracts, which apply before the CLI is started. Edits to generation parameters such as `max_tokens` and `temperature` are tested. Structural changes to tools, tool-call IDs, history, model or response format (for example dropping `stream`) can break the CLI's assumptions, and arbitrary edits are not promised to be safe. Other Pi commands, hooks, UI and header mutation are not claimed to work through this provider.
 
 ## Spike findings
 
@@ -78,7 +126,7 @@ Unusable:
 Still sent with the recipe, not removable:
 
 - A first user-message `<system-reminder>` carrying the account email.
-- A `system`-role message with the environment: cwd, platform, shell, OS version, date.
+- A `system`-role message with the environment: cwd, platform, shell, OS version, date. That cwd is the CLI's private temp directory, not the project. Claude learns the workspace from Pi's own cwd section, forwarded in the system prompt, including under SDK embedding where the host process cwd differs. Pi's tools run in that workspace.
 - The `x-anthropic-billing-header` and "You are a Claude agent, built on Anthropic's Claude Agent SDK." system blocks.
 
 Recipe (zero tools, no markers upstream):
@@ -102,6 +150,8 @@ Why not the alternatives:
 - **Plain `-p "<text>"`:** also works, but cannot carry images.
 
 Keep each block's bytes stable between turns, and do not put a trailing instruction in the last block. Earlier blocks then hit the prompt cache.
+
+The CLI also prepends an environment reminder containing its fresh private cwd. Before forwarding, the provider replaces only that generated cwd value with `[private CLI transport directory, not the Pi workspace]`. All other reminder text, Pi instructions, workspace guidance, history and current tool declarations are preserved. The actual subprocess still runs in a fresh private directory, deleted after the request. Caller `onPayload` hooks see the normalized body and can still edit or replace it. This matching is specific to the CLI's reminder format; CLI changes, date changes, instruction updates and tool-loadout changes can still invalidate the prefix. See [current cache verification](docs/cache-prefix-verification.md).
 
 ### Base URL under subscription login
 
@@ -140,7 +190,15 @@ Resume notes:
 
 Opt-in runs against the real `claude` CLI and a real subscription. They are not part of `npm test`. `scripts/acceptance/run.ts` drives `streamViaCli` the way Pi does (Haiku, two schema-only Pi tools, short prompts), runs the tools itself, and reads the relay's own per-request log lines. `scripts/acceptance/claude-spy.cjs` sits in front of the real CLI on PATH and records only the type of each CLI output message, so Claude Code tool executions (a `user` message with a `tool_result` block) can be counted. On the host the run uses a private `CLAUDE_CONFIG_DIR` with a symlink to the existing login, so the CLI's own state stays out of `~/.claude`.
 
-Run on 2026-10-15, Linux, CLI 2.1.301, model `haiku`.
+For a real-CLI cache-prefix check without subscription traffic:
+
+```bash
+npx vite-node scripts/acceptance/cache-prefix.ts
+```
+
+Add `--live` to send three requests using the existing Claude CLI login and assert that each follow-up reads at least the previous turn's cached read plus write tokens. Both modes compare consecutive request prefixes without logging payloads or credentials. [Verification evidence](docs/cache-prefix-verification.md) records the tested versions and limits.
+
+The following older runs were made on 2026-10-15, Linux, CLI 2.1.301, model `haiku`.
 
 ### 1. 50 consecutive tool-using turns
 

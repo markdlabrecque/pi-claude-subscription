@@ -18,15 +18,21 @@ Pi sessions often run unattended in lightweight containers, so any failure that 
 
 The accepted support policy is **Pi 1.x only**, using `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai`. Pi 0.52 and the legacy `@mariozechner/*` SDK are unsupported. Do not add dual-version adapters, legacy context fallbacks or a 0.52 test matrix. [ADR-0001](adr/0001-pi-1x-only-support.md) records the decision and trade-offs.
 
-This is the target contract, not a claim that the current implementation has completed the migration. Before declaring Pi 1.x support:
+The minimum supported SDK is **1.4.0**, verified with exactly `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`. Node.js **22.19.0 or later** is required. Host SDKs are wildcard peers for Pi package loading, while development dependencies and the lockfile pin 1.4.0. See [README setup](../README.md#setup) for host installation and `npm ci` / `pi install .` for this checkout. The published 0.3.1 package predates the migration.
 
-- Migrate imports, dependency metadata, model catalog access and provider registration to the 1.x SDK.
-- Read effective system instructions and tools from normalized transcript messages using the supported SDK helpers. Preserve instruction updates, tool loadout changes and Pi's workspace while retaining CLI isolation.
-- Verify model capabilities and thinking-level mapping, terminal events, cancellation and usage against the supported SDK.
-- Honor supported provider observation hooks and provider-scoped environment options. Document CLI limitations and warn about unsupported request mutation rather than promising native-provider parity.
-- Record a minimum supported 1.x version and exact tested versions. Install reproducible SDK test dependencies in CI; compatibility tests must not silently skip because a developer's global Pi installation is absent.
+Mandatory installed-SDK tests verify provider registration, settings-driven startup model selection, catalog capabilities, CLI thinking mappings, API-key switching, normalized text and stable-inventory tool turns, measured usage, isolation and the one-upstream-request guard. They cannot skip for a missing global SDK. CI uses Node 22.19.0 with the exact SDK pair on Linux and macOS. Local Linux verification also ran on Node 24.20.0. See [verification evidence](pi-1x-verification.md); remote CI execution is not claimed.
 
-Support does not automatically extend to Pi-derived hosts or every 1.x release. Subscription billing-pool verification remains a separate human acceptance check.
+The remaining target contract is tracked separately:
+
+- #40 owns effective system instructions, including normalized prompt sections and updates. #43 follows it for workspace guidance.
+- #42 owns current-request tool inventory, changing loadouts and activation semantics. Stable-inventory tests do not certify these behaviors.
+- #41 owns truthful failure/cancellation terminal states. Existing error/cancel cleanup regressions remain mandatory.
+- #14 retains broader extension compatibility. #50 owns provider-scoped environment.
+- #52: one independently written extension, `tintinweb/pi-manage-todo-list` at commit `2eb22d3b0c9dd981398d928c8edcc4afce202fa1` (manifest 0.4.0, MIT), is vendored byte-for-byte with a checksum provenance record and loaded from its original entry point through the 1.4.0 SDK resource loader. In an isolated session, its `manage_todo_list` read runs through Pi's own tool loop and the registered provider, with one upstream request per provider call. The same test checks the #40 instruction marker, the #42 loadout with an inactive registered tool that is never offered or run, a #50 scoped base URL and a #51 `onPayload` generation-parameter edit at the fake upstream. Images in the latest user message pass through with bytes and media type unchanged. Earlier user images, images in tool results, malformed images and unknown attachment types are rejected with the existing typed error before any CLI or upstream request, in replay, resume and resume-to-replay fallback. Documents pass through as provider-wire blocks, not as SDK-native content. Persistence, commands, UI, arbitrary extensions and other hosts are not covered. See [README extension compatibility](../README.md#extension-compatibility).
+- #51: the CLI path honors `onPayload` on the actual relayed Messages body (in-place edits and replacements are forwarded; malformed bodies, hook failures and cancellation forward nothing), awaits `onResponse` with the first forwarded upstream status and headers before the body is released, and awaits `onProviderStreamEvent` for each parsed top-level CLI NDJSON stream event before normalization. A throwing `onResponse` or `onProviderStreamEvent` ends the turn with an error naming the hook, without normalizing the body or later events. Provider stream data is the CLI's output, not a captured upstream SSE stream. Relay edits are not reflected in Pi's transcript or the CLI's session history; structural edits can break CLI assumptions. See [README provider hooks](../README.md#provider-hooks).
+- #34 owns cache-write pricing; #35 retains human account-side billing verification. Cache optimization is deferred until #39, #40 and #42 are complete.
+
+Support does not automatically extend to Pi-derived hosts or every 1.x release. These foundation checks do not certify complete Pi 1.x correctness or native-provider parity.
 
 ## Solution
 
@@ -110,7 +116,7 @@ Core behaviour:
 - **Error mapping.** Auth failures map to one non-retryable error mentioning `claude auth login`. Rate and usage limits map to Pi's rate-limit error with retry-after kept. Timeouts and cancels kill the full process tree (process group on macOS and Linux) and then run the same cleanup as a normal end.
 - **CLI version check.** At startup, read the installed CLI version and warn outside a tested range kept in the package.
 - **Logging.** Default logs contain no tokens, prompts or tool arguments. A debug flag enables fuller logging.
-- **Attachments.** Pass through if the CLI handles them; otherwise return a clear error.
+- **Attachments.** Pass through if the request can carry them (images in the latest user message; documents as provider-wire blocks); otherwise end with the typed error before anything is spawned, never a placeholder or a silent drop.
 - **Platforms.** Linux (including lightweight containers with the CLI's credentials mounted read-only) and macOS. On Windows, use WSL.
 - **Constraints.** Only the unmodified official `claude` executable is driven. No token extraction, no direct Anthropic calls, no patching or wrapping the binary. Tool names are mapped honestly and not spoofed as Claude Code's own tools.
 
@@ -136,7 +142,7 @@ Core behaviour:
 - Running Claude Code's own tools or sub-agents through Pi. Pi stays the only harness.
 - Publishing to npm or the Pi package site.
 - Falling back to an Anthropic API key. Pi's own Anthropic provider covers that.
-- General Pi extension compatibility beyond what the CLI path itself affects. Extensions that edit the raw API request are not supported under this provider.
+- General Pi extension compatibility beyond what the CLI path itself affects. Raw request edits are honored only as the tested `onPayload` relay behavior; header mutation and native-provider parity are not supported.
 - Native Windows support.
 
 ## Further Notes

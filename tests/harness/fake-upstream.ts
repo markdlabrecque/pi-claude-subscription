@@ -10,10 +10,15 @@ export type Scenario =
   | "made_up_mcp_tool"
   | "custom_tool"
   | "t3_code_tool"
+  | "todo_read_tool"
+  | "echo_tool_result"
   | "401"
   | "429"
   | "503"
   | "529"
+  | "500"
+  | "cut_off"
+  | "max_tokens"
   | "hang";
 
 export interface RecordedRequest {
@@ -92,6 +97,32 @@ export async function startFakeUpstream(
         case "normal":
           body = message([{ type: "text", text: NORMAL_TEXT }], "end_turn");
           break;
+        case "echo_tool_result": {
+          // Echo only an actual tool-result turn in the replay request. Missing
+          // history must fail, not produce a canned successful final answer.
+          const request = requests[index].body as {
+            messages?: { content?: unknown }[];
+          };
+          const text = (request.messages ?? [])
+            .flatMap((entry) =>
+              Array.isArray(entry.content) ? entry.content : [],
+            )
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("\n");
+          const result = text.match(
+            /<turn role="tool"(?: name="[^"]+")?>\n([\s\S]*?)\n<\/turn>/,
+          );
+          if (!result?.[1]) {
+            ({ status, body } = error("missing_tool_result", 400));
+          } else {
+            body = message(
+              [{ type: "text", text: `Tool returned: ${result[1]}` }],
+              "end_turn",
+            );
+          }
+          break;
+        }
         case "thinking_only":
           body = message([{ type: "thinking", thinking: "" }], "end_turn");
           break;
@@ -106,6 +137,19 @@ export async function startFakeUpstream(
           break;
         case "t3_code_tool":
           body = toolUse("mcp__custom-tools__mcp__t3_code__link_pull_request");
+          break;
+        case "todo_read_tool":
+          body = message(
+            [
+              {
+                type: "tool_use",
+                id: "toolu_todo_read",
+                name: "mcp__custom-tools__manage_todo_list",
+                input: { operation: "read" },
+              },
+            ],
+            "tool_use",
+          );
           break;
         case "custom_tool":
           body = message(
@@ -133,6 +177,25 @@ export async function startFakeUpstream(
         case "529":
           ({ status, body } = error("overloaded_error", 529));
           break;
+        case "500":
+          ({ status, body } = error("api_error", 500));
+          break;
+        case "max_tokens":
+          body = message(
+            [{ type: "text", text: "A reply cut short by the output limit" }],
+            "max_tokens",
+          );
+          break;
+        case "cut_off": {
+          // A 200 whose body ends mid-message, before message_stop.
+          const full = JSON.stringify(
+            message([{ type: "text", text: NORMAL_TEXT }], "end_turn"),
+          );
+          res.writeHead(200, { ...headers, "content-length": full.length });
+          res.write(full.slice(0, 40));
+          setTimeout(() => res.socket?.destroy(), 20);
+          return;
+        }
       }
       res.writeHead(status, headers);
       res.end(JSON.stringify(body));
