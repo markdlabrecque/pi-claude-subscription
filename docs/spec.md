@@ -20,7 +20,7 @@ The accepted support policy is **Pi 1.x only**, using `@earendil-works/pi-coding
 
 The minimum supported SDK is **1.4.0**, verified with exactly `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`. Node.js **22.19.0 or later** is required. Host SDKs are wildcard peers for Pi package loading, while development dependencies and the lockfile pin 1.4.0. See [README setup](../README.md#setup) for host installation and `npm ci` / `pi install .` for this checkout. The published 0.3.1 package predates the migration.
 
-Mandatory installed-SDK tests verify provider registration, settings-driven startup model selection, catalog capabilities, CLI thinking mappings, API-key switching, normalized text and stable-inventory tool turns, measured usage, isolation and the one-upstream-request guard. They cannot skip for a missing global SDK. CI uses Node 22.19.0 with the exact SDK pair on Linux, macOS and Windows. Local Linux verification also ran on Node 24.20.0. See [verification evidence](pi-1x-verification.md); remote CI execution is not claimed.
+Mandatory installed-SDK tests verify provider registration, settings-driven startup model selection, catalog capabilities, CLI thinking mappings, API-key switching, normalized text and stable-inventory tool turns, measured usage, isolation and the one-upstream-request guard. They cannot skip for a missing global SDK. CI uses Node 22.19.0 with the exact SDK pair on Linux and macOS. Local Linux verification also ran on Node 24.20.0. See [verification evidence](pi-1x-verification.md); remote CI execution is not claimed.
 
 The remaining target contract is tracked separately:
 
