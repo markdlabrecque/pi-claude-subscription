@@ -93,7 +93,11 @@ export function writeMcpConfig(toolDefs: McpToolDef[]): string {
   try {
     writeFileSync(configFilePath, JSON.stringify(config));
   } catch (err) {
-    rmSync(schemaFilePath, { force: true });
+    try {
+      rmSync(schemaFilePath, { force: true });
+    } catch {
+      // The write error is the one the caller needs to see
+    }
     throw err;
   }
 

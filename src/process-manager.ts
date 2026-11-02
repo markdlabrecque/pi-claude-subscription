@@ -142,13 +142,9 @@ export function spawnClaude(
     proc.once("exit", () => killProcessGroup(proc));
     const cleanup = { process: "unknown", sandbox: "unknown" };
     cleanupObservations.set(proc, cleanup);
+    // Never throws, so a failed removal cannot escape these event handlers
     const removeSandbox = () => {
-      try {
-        isolation.cleanup();
-        cleanup.sandbox = "confirmed";
-      } catch {
-        cleanup.sandbox = "failed";
-      }
+      cleanup.sandbox = isolation.cleanup();
     };
     proc.once("close", () => {
       cleanup.process = "confirmed";
@@ -157,6 +153,7 @@ export function spawnClaude(
     proc.once("error", removeSandbox);
     return proc as ChildProcess;
   } catch (err) {
+    // Never throws, so the spawn error is the one the caller sees
     isolation.cleanup();
     throw err;
   }

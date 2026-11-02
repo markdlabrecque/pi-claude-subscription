@@ -9,7 +9,7 @@
  * they stay active under --setting-sources "".
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,8 +20,47 @@ export interface Isolation {
   args: string[];
   /** Environment variables to add to the spawn environment. */
   env: Record<string, string>;
-  /** Remove the temp directory. Safe to call more than once. */
-  cleanup(): void;
+  /**
+   * Remove the temp directory, retrying briefly on transient errors. Never
+   * throws: it runs from subprocess event handlers, where a throw ends Pi.
+   * Returns "confirmed" once the directory is gone, else "failed". Safe to
+   * call more than once.
+   */
+  cleanup(): SandboxCleanup;
+}
+
+export type SandboxCleanup = "confirmed" | "failed";
+
+/**
+ * Errors a later attempt can clear, as in Node's own rm retries. ENOTEMPTY is
+ * an entry created while the recursive remove runs; EBUSY/EPERM are Windows
+ * handles still open.
+ */
+const TRANSIENT = new Set(["ENOTEMPTY", "EBUSY", "EPERM", "EMFILE", "ENFILE"]);
+const CLEANUP_ATTEMPTS = 5;
+const CLEANUP_RETRY_MS = 10;
+
+/** Synchronous so callers keep a plain outcome; at most ~100ms in total. */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Remove only `dir`, the request's own mkdtemp directory. */
+function removeDir(dir: string): SandboxCleanup {
+  for (let attempt = 1; ; attempt++) {
+    let code: string | undefined;
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      // A writer can still recreate it; only an absent directory is confirmed
+      if (!existsSync(dir)) return "confirmed";
+      code = "ENOTEMPTY";
+    } catch (err) {
+      code = (err as NodeJS.ErrnoException)?.code;
+    }
+    if (!code || !TRANSIENT.has(code) || attempt >= CLEANUP_ATTEMPTS)
+      return "failed";
+    pause(CLEANUP_RETRY_MS * attempt);
+  }
 }
 
 /**
@@ -53,7 +92,13 @@ const FALLBACK_SYSTEM_PROMPT = "You are a helpful assistant.";
 
 export function createIsolation(systemPrompt?: string): Isolation {
   const cwd = mkdtempSync(join(tmpdir(), "pi-claude-subscription-"));
-  const cleanup = () => rmSync(cwd, { recursive: true, force: true });
+  let removed = false;
+  const cleanup = (): SandboxCleanup => {
+    if (removed) return "confirmed";
+    const outcome = removeDir(cwd);
+    removed = outcome === "confirmed";
+    return outcome;
+  };
 
   try {
     const args = [

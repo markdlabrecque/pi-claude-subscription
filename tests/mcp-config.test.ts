@@ -208,6 +208,19 @@ describe("writeMcpConfig", () => {
     const schemasPath = mocks.writeFileSync.mock.calls[0][0];
     expect(mocks.rmSync).toHaveBeenCalledWith(schemasPath, { force: true });
   });
+
+  it("keeps the original error when removing the schema file also fails", () => {
+    mocks.writeFileSync
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("ENOSPC");
+      });
+    mocks.rmSync.mockImplementationOnce(() => {
+      throw new Error("EACCES");
+    });
+
+    expect(() => writeMcpConfig([])).toThrow("ENOSPC");
+  });
 });
 
 describe("removeMcpConfig", () => {
