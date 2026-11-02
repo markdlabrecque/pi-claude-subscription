@@ -1,6 +1,6 @@
 # Local audit logging
 
-Implemented on `feat/local-audit`, not included in the released v0.4.0 tag. The known Pi 1.4.0 loader defect is not fixed by this feature. Confirm the installed extension loads before relying on request logging.
+Audit logging and its review fixes are merged into the source prepared for extension v1.4.0 stable, along with the Pi SDK 1.4.0 loader fix. The released v0.4.0 tag has neither audit logging nor the loader fix. Prepared source is not a published release or a personal installation update. See the [v1.4.0 release checklist and rollback instructions](releases/v1.4.0.md). Confirm the installed extension loads before relying on request logging.
 
 ## Enable for the week's work
 
@@ -50,7 +50,7 @@ PI_CLAUDE_SUBSCRIPTION_AUDIT=1 \
 
 Replace the placeholder with the actual extension directory. The check uses an isolated temporary workspace and agent directory and loads only this extension. It does not call a model or provider stream. If the extension reaches registration, its normal CLI presence/authentication validation can run. This is an explicit loader check, not an automatic capture of every future Pi startup failure.
 
-An unavailable SDK import, thrown loader error or reported loader error is recorded as failure. No loaded/registered provider is recorded as skipped. Both yield exit status 1. Success requires the loader to report the extension and the expected provider registration. With audit off, the command does nothing and exits 0; that is not evidence of a successful load. The #76 branch fix resolves the packaged-load import defect against SDK 1.4.0. The v0.4.0 tag still lacks that fix. See [loading verification](pi-1x-verification.md#packed-tarball-load-38) for the tested installation paths and limitations.
+An unavailable SDK import, thrown loader error or reported loader error is recorded as failure. No loaded/registered provider is recorded as skipped. Both yield exit status 1. Success requires the loader to report the extension and the expected provider registration. With audit off, the command does nothing and exits 0; that is not evidence of a successful load. The merged #76 fix resolves the packaged-load import defect against SDK 1.4.0. The v0.4.0 tag still lacks that fix. See [loading verification](pi-1x-verification.md#packed-tarball-load-38) for the tested installation paths and limitations.
 
 ## Reading the week
 
@@ -76,11 +76,11 @@ Default audit data is Git-ignored. JSONL files and lock directories are excluded
 
 ## Verification evidence
 
-The implementation has 76 focused synthetic tests, including filesystem privacy, off-mode behavior, retention/size limits, concurrent appends, write failures, early errors, successful/partial usage, cancellation races, both provider routes and standalone SDK loader delegation.
+The historical implementation verification had 76 focused synthetic tests, including filesystem privacy, off-mode behavior, retention/size limits, concurrent appends, write failures, early errors, successful/partial usage, cancellation races, both provider routes and standalone SDK loader delegation.
 
 The initial candidate was committed as `43c87b0`. Subsequent adversarial review found three defects despite its green tests. Regression tests reproduced outside-directory writes/deletion during lock contention, missing real-SDK API HTTP failure metadata and usage lost when a CLI stream hook throws. Those tests failed against the initial implementation and pass with the fixes. Added checks also cover root/ancestor swaps, replacement locks, recovered HTTP retries and later usage corrections.
 
-Local Linux checks on the revised candidate passed:
+Historical local Linux checks on the audit review candidate passed:
 
 - 587 tests, with the pre-existing packed-loader test still skipped;
 - coverage of 97.36% statements/lines, 91.55% branches and 98.63% functions;
