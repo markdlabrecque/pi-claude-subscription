@@ -74,6 +74,8 @@ export interface Relay {
   readonly failure: UpstreamFailure | undefined;
   /** Set when the relay refused to forward the Messages request itself. */
   readonly requestFailure: string | undefined;
+  /** An upstream connection failed before its HTTP body completed. */
+  readonly transportFailure: string | undefined;
   /** Close the server and drop open connections. Safe to call twice. */
   stop(): Promise<void>;
 }
@@ -87,6 +89,8 @@ export interface RelayOptions {
   onPayload?: (payload: unknown) => unknown | Promise<unknown>;
   /** Sees the upstream status and headers before the body is released. */
   onResponse?: (response: ProviderResponse) => void | Promise<void>;
+  /** Notify the provider immediately, without waiting for CLI retry delays. */
+  onTransportFailure?: () => void;
 }
 
 const DEFAULT_UPSTREAM = "https://api.anthropic.com";
@@ -143,6 +147,7 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
   let rejectedCount = 0;
   let failure: UpstreamFailure | undefined;
   let requestFailure: string | undefined;
+  let transportFailure: string | undefined;
   // The one Messages request has been claimed (forwarded or refused)
   let claimed = false;
   let stopped = false;
@@ -168,6 +173,17 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
     upstreamCount++;
     let gone = false;
     res.on("close", () => (gone = true));
+    const failTransport = () => {
+      // Client cancellation, relay shutdown and duplicate error/close events
+      // are not new upstream failures.
+      if (gone || stopped || transportFailure || requestFailure) return;
+      transportFailure =
+        "Claude upstream connection closed before the response completed.";
+      log("relay upstream connection failed before response completion");
+      if (!res.headersSent) reject(res, 502, "relay: upstream unreachable");
+      else res.destroy();
+      options?.onTransportFailure?.();
+    };
     const headers = { ...req.headers, host: upstream.host };
     if (body) {
       headers["content-length"] = String(body.length);
@@ -183,6 +199,13 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
         headers,
       },
       (up) => {
+        // pipe() does not close its destination when the source aborts.
+        // Install these before awaiting the response hook, while up is paused.
+        up.on("aborted", failTransport);
+        up.on("error", failTransport);
+        up.on("close", () => {
+          if (!up.complete) failTransport();
+        });
         log(
           `relay POST ${req.url?.split("?")[0]} -> upstream status=${up.statusCode} upstream=${upstreamCount} rejected=${rejectedCount}`,
         );
@@ -194,7 +217,7 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
           };
         }
         const release = () => {
-          if (gone || stopped) return void up.destroy();
+          if (gone || stopped || transportFailure) return void up.destroy();
           res.writeHead(up.statusCode ?? 502, up.headers);
           up.pipe(res);
         };
@@ -205,20 +228,17 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
             status: up.statusCode ?? 502,
             headers: headerRecord(up.headers),
           }))().then(release, (err) => {
-          up.destroy();
+          if (gone || stopped || transportFailure) return;
           refuse(
             res,
             "response hook failed",
             `Response hook failed: ${errorText(err)}`,
           );
+          up.destroy();
         });
       },
     );
-    proxied.on("error", (err) => {
-      log(`relay upstream error: ${err.message}`);
-      if (!res.headersSent) reject(res, 502, "relay: upstream unreachable");
-      else res.destroy();
-    });
+    proxied.on("error", failTransport);
     res.on("close", () => proxied.destroy());
     if (body) proxied.end(body);
     else req.pipe(proxied);
@@ -338,6 +358,9 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
     },
     get requestFailure() {
       return requestFailure;
+    },
+    get transportFailure() {
+      return transportFailure;
     },
     stop: () =>
       new Promise<void>((resolve) => {

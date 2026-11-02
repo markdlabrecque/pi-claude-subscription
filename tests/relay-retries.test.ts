@@ -50,13 +50,14 @@ describe("one-request cap against CLI retries", () => {
     expect(message.errorMessage).toBe("Claude API returned 529 (overloaded).");
   });
 
-  // Finding (not a fix): when upstream drops mid-body the relay neither ends
-  // nor closes the CLI's response, so the CLI never reaches a retry. A turn
-  // driven through the fake CLI then waits forever, so this is checked at the
-  // relay. The cut-off is not recorded as a failure either.
-  it("a cut-off upstream body leaves the CLI's response open; a later retry is still rejected", async () => {
+  it("a cut-off upstream body closes promptly; a later retry is still rejected", async () => {
     upstream = await startFakeUpstream(["cut_off", "normal"]);
-    const relay = await startRelay({ upstream: upstream.url, log: () => {} });
+    const onTransportFailure = vi.fn();
+    const relay = await startRelay({
+      upstream: upstream.url,
+      log: () => {},
+      onTransportFailure,
+    });
     try {
       const first = await fetch(`${relay.url}/v1/messages`, {
         method: "POST",
@@ -75,8 +76,12 @@ describe("one-request cap against CLI retries", () => {
         body: "{}",
       });
 
-      expect(state).toBe("still open");
+      expect(state).toBe("errored");
       expect(relay.failure).toBeUndefined();
+      expect(relay.transportFailure).toBe(
+        "Claude upstream connection closed before the response completed.",
+      );
+      expect(onTransportFailure).toHaveBeenCalledTimes(1);
       expect(retry.status).toBe(400);
       expect(upstream.requests).toHaveLength(1);
       expect(relay.upstreamCount).toBe(1);

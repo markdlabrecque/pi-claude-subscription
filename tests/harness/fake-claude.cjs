@@ -240,6 +240,37 @@ async function run(userMessage) {
   let res = await fetch(url, request);
   // Like the real CLI, retry a server error once; the relay rejects the retry.
   if (res.status >= 500) res = await fetch(url, request);
+  if (res.headers.get("content-type")?.includes("text/event-stream")) {
+    // Forward synthetic SSE as it arrives, rather than buffering the body.
+    const lines = readline.createInterface({
+      input: require("node:stream").Readable.fromWeb(res.body),
+    });
+    try {
+      for await (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const parsed = JSON.parse(line.slice(6));
+          if (
+            parsed.type === "message_stop" &&
+            process.env.FAKE_CLAUDE_STREAM_STOP_DELAY_MS
+          ) {
+            await new Promise((resolve) =>
+              setTimeout(
+                resolve,
+                Number(process.env.FAKE_CLAUDE_STREAM_STOP_DELAY_MS),
+              ),
+            );
+          }
+          event(parsed);
+        }
+      }
+    } catch {
+      // Model a CLI stalled in its retry/backoff path. The provider must end
+      // the request from the relay notification, not wait for a CLI result.
+      setInterval(() => {}, 1000);
+      return;
+    }
+    return;
+  }
   let reply;
   try {
     reply = await res.json();

@@ -192,6 +192,12 @@ export function streamViaCli(
     let proc: ReturnType<typeof spawnClaude> | undefined;
     let abortHandler: (() => void) | undefined;
     let relay: Relay | undefined;
+    // A transport drop releases observers, but does not settle the message
+    // until buffered CLI stdout and the event queue have drained.
+    let releaseTransport!: () => void;
+    const transportDropped = new Promise<void>((resolve) => {
+      releaseTransport = resolve;
+    });
     // The CLI refused to start a request because no login is stored
     let notLoggedIn = false;
     let stopRequestTimer: (() => void) | undefined;
@@ -300,6 +306,13 @@ export function streamViaCli(
       auditReason = "relay_error";
       relay = await startRelay({
         upstream: env.ANTHROPIC_BASE_URL,
+        onTransportFailure: () => {
+          if (ended || broken) return;
+          releaseTransport();
+          // Reuse the bounded stdout-flush grace period. Do not close readline
+          // or settle here: completion and usage may still be in the CLI pipe.
+          if (proc) cleanupProcess(proc);
+        },
         onPayload: async (payload) => {
           normalizeCliEnvironment(payload);
           try {
@@ -389,9 +402,11 @@ export function streamViaCli(
                 ? "inactivity_timeout"
                 : relay?.failure || notLoggedIn
                   ? "http_error"
-                  : seen.resultError
-                    ? "result_error"
-                    : auditReason;
+                  : relay?.transportFailure && !seen.messageStop
+                    ? "relay_error"
+                    : seen.resultError
+                      ? "result_error"
+                      : auditReason;
         }
         // A Pi hook failed or the relay refused the request: say so, as an error
         const refused = relay?.requestFailure ?? observerFailure;
@@ -403,7 +418,10 @@ export function streamViaCli(
           relay?.failure ?? (notLoggedIn ? { status: 401 } : undefined);
         endWithError(
           bridge.getOutput(),
-          failure ? describeFailure(failure) : errMsg,
+          failure
+            ? describeFailure(failure)
+            : ((!seen.messageStop ? relay?.transportFailure : undefined) ??
+                errMsg),
         );
       }
 
@@ -459,6 +477,9 @@ export function streamViaCli(
       });
       const onClose = (code: number | null, signal: string | null) => {
         if (broken) return; // Break-early kill, expected
+        // A transport drop owns cleanup, not the terminal result. Decide only
+        // after stdout and queued protocol events have drained below.
+        if (relay?.transportFailure) return;
         if (code === null) {
           // Killed by a signal: not an abort or our own cleanup, so report it
           if (resultSeen || options?.signal?.aborted) return;
@@ -516,8 +537,11 @@ export function streamViaCli(
           // Usage was received even if the caller's observer rejects the event.
           if (isTopLevel && audit.enabled) observeAuditUsage(usage, msg.event);
           // Pi's observer sees the parsed CLI event before the bridge does
-          if (isTopLevel && observe) {
-            await observe(msg.event, model);
+          if (isTopLevel && observe && !relay?.transportFailure) {
+            // A stalled observer must not hide already-received completion or
+            // usage after a transport drop. Its late resolution cannot mutate
+            // the bridge; this continuation remains in the ordered queue.
+            await Promise.race([observe(msg.event, model), transportDropped]);
             if (broken || seen.cancelled || ended) return;
           }
           if (isTopLevel) {
@@ -555,7 +579,10 @@ export function streamViaCli(
           if (msg.is_error && NOT_LOGGED_IN.test(msg.result ?? "")) {
             notLoggedIn = true;
             endStreamWithError(msg.result!);
-          } else if (msg.is_error || msg.subtype.startsWith("error")) {
+          } else if (
+            !relay?.transportFailure &&
+            (msg.is_error || msg.subtype.startsWith("error"))
+          ) {
             endStreamWithError(
               msg.error ||
                 msg.errors?.join("\n") ||
@@ -597,7 +624,12 @@ export function streamViaCli(
       // The terminal guard drops these once an error was already reported.
       // A known upstream failure or refused request is reported even after
       // partial content.
-      if (relay.failure || relay.requestFailure) endStreamWithError("");
+      if (
+        relay.failure ||
+        relay.requestFailure ||
+        (relay.transportFailure && !seen.messageStop)
+      )
+        endStreamWithError("");
 
       // A thinking-only reply (no text, no tool call) leaves Pi with nothing
       // to act on; the empty-signature thinking block can't be replayed
@@ -695,7 +727,8 @@ export function streamViaCli(
           if (seen.inactive) return "inactivity-timeout";
           if (seen.resumeLost) return "resume-lost";
           if (broken) return "tool-use";
-          if (ended?.failure) return "upstream-error";
+          if (ended?.failure || (ended?.transportFailure && !seen.messageStop))
+            return "upstream-error";
           if (resultSeen)
             return seen.resultError ? "result-error" : "completed";
           if (exitCode === 0)

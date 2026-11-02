@@ -18,6 +18,11 @@ export type Scenario =
   | "529"
   | "500"
   | "cut_off"
+  | "stream_cut_off"
+  | "stream_complete"
+  | "stream_usage_cut_off"
+  | "429_cut_off"
+  | "529_cut_off"
   | "max_tokens"
   | "hang";
 
@@ -34,6 +39,8 @@ export interface FakeUpstream {
   /** Every request received, in order (hung requests included). */
   requests: RecordedRequest[];
   close(): Promise<void>;
+  /** Drop active upstream connections after the test observes partial output. */
+  disconnect(): void;
 }
 
 export const NORMAL_TEXT = "Hello from the fake upstream";
@@ -186,6 +193,57 @@ export async function startFakeUpstream(
             "max_tokens",
           );
           break;
+        case "429_cut_off":
+        case "529_cut_off": {
+          res.writeHead(Number(scenario.slice(0, 3)), {
+            ...headers,
+            "retry-after": "30",
+            "content-length": "1000",
+          });
+          res.write('{"type":"error"');
+          return;
+        }
+        case "stream_cut_off":
+        case "stream_usage_cut_off":
+        case "stream_complete": {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const event of [
+            {
+              type: "message_start",
+              message: { usage: { input_tokens: 10, output_tokens: 1 } },
+            },
+            {
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            },
+            {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: NORMAL_TEXT },
+            },
+          ])
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          if (scenario === "stream_usage_cut_off") {
+            res.write(
+              `data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 5 } })}\n\n`,
+            );
+          }
+          if (scenario === "stream_complete") {
+            for (const event of [
+              { type: "content_block_stop", index: 0 },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "max_tokens" },
+                usage: { output_tokens: 5 },
+              },
+              { type: "message_stop" },
+            ])
+              res.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+          // The test drops the socket only after Pi has observed the content.
+          return;
+        }
         case "cut_off": {
           // A 200 whose body ends mid-message, before message_stop.
           const full = JSON.stringify(
@@ -214,6 +272,9 @@ export async function startFakeUpstream(
   return {
     url: `http://127.0.0.1:${port}`,
     requests,
+    disconnect: () => {
+      for (const socket of sockets) socket.destroy();
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
