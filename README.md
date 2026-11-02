@@ -14,7 +14,7 @@ This project targets **Pi 1.x only**, using `@earendil-works/pi-coding-agent` an
 
 The minimum supported Pi version is **1.4.0**. The exact tested SDK pair is `@earendil-works/pi-ai@1.4.0` and `@earendil-works/pi-coding-agent@1.4.0`, pinned in development dependencies and the lockfile. Mandatory local-SDK tests cover startup model selection, registered text/tool requests, thinking mappings, API-key fallback, isolation and the one-request guard. CI runs the same suite on Node 22.19.0 across Linux and macOS. Local verification ran on Linux with Node 22.19.0 and 24.20.0; remote CI results are not implied. See [migration verification](docs/pi-1x-verification.md).
 
-Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. In particular, the packed-package loader test fails on Pi 1.4.0 and remains skipped. See [current status and adoption cautions](docs/roadmap.md).
+Host SDKs remain wildcard peers as required by Pi package loading. That metadata does not claim support for earlier releases, every later 1.x release or Pi-derived hosts. Complete provider correctness and native-provider parity are not certified by these checks. The packed-package and Git/local checkout loader regressions run without skips against SDK 1.4.0. These loading checks send no model requests. See [installation verification](docs/pi-1x-verification.md#packed-tarball-load-38) and [current status and adoption cautions](docs/roadmap.md).
 
 ## Requirements
 
@@ -28,7 +28,7 @@ Host SDKs remain wildcard peers as required by Pi package loading. That metadata
 
 Releases are GitHub-only. Install this extension from Git or a local checkout, not from npm or the Pi package gallery. npm publication would require a separate future decision and workflow change; registry credentials are not a release prerequisite.
 
-The [v0.4.0 GitHub release](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v0.4.0) contains the Pi 1.x migration and cache fixes. Git distribution does not bypass the [known Pi 1.4.0 loader failure](docs/pi-1x-verification.md#packed-tarball-load-38). Confirm the provider loads in your actual Pi installation before relying on it.
+The [v0.4.0 GitHub release](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v0.4.0) contains the Pi 1.x migration and cache fixes, but still has the Pi 1.4.0 loader defect. The loader fix is on this branch, not in that tag. Both a locally packed install and this Git/local checkout pass the [SDK loader regressions](docs/pi-1x-verification.md#packed-tarball-load-38). Confirm the provider loads in your actual Pi installation before relying on it.
 
 With Pi installed, install the tagged Git source:
 
@@ -46,7 +46,7 @@ npm ci
 pi install .
 ```
 
-Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings; it is not proof that the loader succeeds. The earlier 0.3.1 source version predates the migration and is not evidence of an npm publication. No global Pi installation, real CLI or login is needed to run the tests.
+Run `npm ci` from this repository. `pi install .` adds the local checkout to your personal Pi settings. The checkout must contain the loader fix; installing the unchanged v0.4.0 tag does not include it. The SDK loading regression is `npx vitest run tests/packed-tarball-load.test.ts`, independent of your personal Pi settings. The earlier 0.3.1 source version predates the migration and is not evidence of an npm publication. No global Pi installation, real CLI or login is needed to run the tests.
 
 Then select a model via `/model` in the interactive UI. Haiku, Sonnet, Opus and Fable are listed under the `pi-claude-subscription` provider.
 
@@ -74,7 +74,7 @@ Pushing a `v*` tag runs `.github/workflows/publish.yml`. The tag must match `pac
 - `resume` mode depends on CLI session files on the local disk, so it does not survive throwaway containers. Use `replay`.
 - Images (Pi's native `image` blocks) in the latest user message are passed through byte-identically. Documents in any user turn are passed through as provider-wire `document` blocks; Pi 1.x has no native document block, so this is wire behavior, not SDK support. Earlier documents are re-sent with each request and count against the context window every time, so large documents can push a long session over its limit.
 - Anything else a request would have to send is rejected with a typed error before any CLI or upstream request, rather than dropped or replaced by a placeholder: images in earlier user messages or in tool results (including custom-tool results), malformed images (missing or empty base64 data or media type), and any other attachment type. In `resume` mode only what follows the last assistant turn is checked, since the resumed CLI session already holds the rest; when resume falls back to `replay`, the whole history is checked again.
-- The packed-package loader check fails on Pi 1.4.0 and remains skipped. Green provider tests do not certify installation through Pi's extension loader.
+- Package and Git/local checkout loading are tested through Pi 1.4.0's installed SDK loader with startup probes only. Remote Git fetching, npm publication, compiled Pi binaries and other SDK versions are not certified by these checks.
 - The relay forwards at most one Messages request per provider invocation. CLI retries and output-limit continuations are rejected; Pi's own retry policy can start another invocation. A dropped upstream stream can wait until timeout. See [ADR-0002](docs/adr/0002-one-request-cap-and-cli-retries.md).
 - Extension compatibility is limited to the cases in [Extension compatibility](#extension-compatibility) ([#14](https://github.com/markdlabrecque/pi-claude-subscription/issues/14), [#52](https://github.com/markdlabrecque/pi-claude-subscription/issues/52)). Native-provider parity is not promised; see [Provider hooks](#provider-hooks) for what the CLI path does honor.
 - Cache-write accounting and both known replay-prefix regressions are fixed in v0.4.0. Real instruction or tool-loadout changes can still invalidate the cache. Token costs are API-equivalent estimates, not subscription charges or quota measurements.

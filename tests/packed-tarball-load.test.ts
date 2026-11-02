@@ -7,12 +7,13 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 import { installFakeClaude, type FakeClaude } from "./harness";
+import manifest from "../package.json";
+import lockfile from "../package-lock.json";
 
 // Tested against Pi 1.4.0 (@earendil-works/pi-coding-agent@1.4.0, the pinned
 // devDependency). Recorded in docs/pi-1x-verification.md.
@@ -27,57 +28,141 @@ afterEach(() => {
   claude = dir = undefined;
 });
 
-/** Pack the repo into a tarball and extract it, as `npm install` would. */
-function packAndExtract(dest: string): string {
+/** Install the actual tarball and runtime dependencies, without peer downloads. */
+function packAndInstall(dest: string): string {
   const out = execFileSync(
     "npm",
     ["pack", "--json", "--ignore-scripts", "--pack-destination", dest],
     { cwd: root, encoding: "utf8" },
   );
   const [{ filename }] = JSON.parse(out) as Array<{ filename: string }>;
-  execFileSync("tar", ["-xzf", filename], { cwd: dest });
-  const pkg = join(dest, "package");
-  // Stand in for the installed dependencies and Pi peers.
-  const modules = join(root, "node_modules");
-  symlinkSync(modules, join(pkg, "node_modules"), "junction");
-  return pkg;
+  // A clean npm ci caches locked tarballs, not necessarily registry metadata.
+  // Give this install the same runtime resolutions so offline mode never needs
+  // to resolve the package's dependency ranges against a registry packument.
+  const fixture = {
+    name: "pi-loader-fixture",
+    version: "1.0.0",
+    dependencies: { [manifest.name]: `file:./${filename}` },
+  };
+  const { name, version, dependencies, peerDependencies, engines } = manifest;
+  writeFileSync(join(dest, "package.json"), JSON.stringify(fixture));
+  writeFileSync(
+    join(dest, "package-lock.json"),
+    JSON.stringify({
+      name: fixture.name,
+      version: fixture.version,
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": fixture,
+        ...Object.fromEntries(
+          Object.entries(lockfile.packages).filter(
+            ([path, entry]) => path && !("dev" in entry && entry.dev),
+          ),
+        ),
+        [`node_modules/${name}`]: {
+          name,
+          version,
+          resolved: `file:./${filename}`,
+          dependencies,
+          peerDependencies,
+          engines,
+        },
+      },
+    }),
+  );
+  execFileSync(
+    "npm",
+    [
+      "ci",
+      "--offline",
+      "--ignore-scripts",
+      "--legacy-peer-deps",
+      "--no-audit",
+      "--no-fund",
+    ],
+    { cwd: dest, encoding: "utf8" },
+  );
+  return join(dest, "node_modules", "pi-claude-subscription");
 }
 
-// Skipped: Pi 1.4.0 cannot resolve @earendil-works/pi-ai/providers/anthropic or
-// /api/anthropic-messages through its extension loader. Re-enable with that fix.
-it.skip("loads in Pi 1.4.0 from the packed tarball and registers its provider", async () => {
-  dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-packed-")));
-  const pkg = packAndExtract(dir);
-  const cwd = join(dir, "cwd");
-  mkdirSync(cwd);
-  // Startup probes only; no request is made.
-  claude = installFakeClaude("http://127.0.0.1:9");
+it.each(
+  ["packed tarball", "Git/local checkout"].flatMap((source) =>
+    ["0", "1"].map((fallback) => ({ source, fallback })),
+  ),
+)(
+  "loads in Pi 1.4.0 from the $source with API fallback=$fallback and registers its provider",
+  async ({ source, fallback }) => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-installed-")));
+    const pkg = source === "packed tarball" ? packAndInstall(dir) : root;
+    const cwd = join(dir, "cwd");
+    mkdirSync(cwd);
+    // Startup probes only; no request is made.
+    claude = installFakeClaude("http://127.0.0.1:9");
 
-  const { extensions, errors, runtime } = await discoverAndLoadExtensions(
-    [pkg],
-    cwd,
-    join(dir, "no-agent-dir"),
-  );
+    // A fresh Node process uses the installed SDK, not Vitest module transforms.
+    // It also keeps Jiti's source maps separate from V8 unit-test coverage.
+    const loaded = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
+const [pkg, cwd, agent] = process.argv.slice(1);
+const { extensions, errors, runtime } = await discoverAndLoadExtensions([pkg], cwd, agent);
+console.log(JSON.stringify({
+  errors,
+  entries: extensions.map(e => e.resolvedPath),
+  providers: runtime.pendingProviderRegistrations.map(p => ({
+    name: p.name, modelCount: p.config.models?.length ?? 0,
+    hasStream: typeof p.config.streamSimple === "function",
+  })),
+}));
+`,
+          pkg,
+          cwd,
+          join(dir, "no-agent-dir"),
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK: fallback,
+            PI_CLAUDE_SUBSCRIPTION_AUDIT: "0",
+          },
+        },
+      ),
+    );
 
-  expect(errors).toEqual([]);
-  const entry = join(pkg, "index.ts");
-  expect(extensions.map((e) => e.resolvedPath)).toEqual([entry]);
-  const providers = runtime.pendingProviderRegistrations;
-  expect(providers.map((p) => p.name)).toEqual(["pi-claude-subscription"]);
-  expect(providers[0].config.models?.length).toBeGreaterThan(0);
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.entries).toEqual([join(pkg, "index.ts")]);
+    expect(loaded.providers).toEqual([
+      {
+        name: "pi-claude-subscription",
+        modelCount: expect.any(Number),
+        hasStream: true,
+      },
+    ]);
+    expect(loaded.providers[0].modelCount).toBeGreaterThan(0);
 
-  // The schema-only MCP server ships next to the packed mcp-config module.
-  const mcpConfig = join(pkg, "src", "mcp-config.ts");
-  const { writeMcpConfig, removeMcpConfig } = await import(mcpConfig);
-  const configPath: string = writeMcpConfig([
-    { name: "t", description: "t", inputSchema: { type: "object" } },
-  ]);
-  try {
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    const serverPath = config.mcpServers["custom-tools"].args[0];
-    expect(serverPath).toBe(join(pkg, "src", "mcp-schema-server.cjs"));
-    expect(existsSync(serverPath)).toBe(true);
-  } finally {
-    removeMcpConfig(configPath);
-  }
-}, 60_000);
+    // The schema-only MCP server ships next to the packed mcp-config module.
+    const mcpConfig = join(pkg, "src", "mcp-config.ts");
+    const { writeMcpConfig, removeMcpConfig } = await import(mcpConfig);
+    const configPath: string = writeMcpConfig([
+      { name: "t", description: "t", inputSchema: { type: "object" } },
+    ]);
+    try {
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      const serverPath = config.mcpServers["custom-tools"].args[0];
+      expect(serverPath).toBe(join(pkg, "src", "mcp-schema-server.cjs"));
+      expect(existsSync(serverPath)).toBe(true);
+    } finally {
+      removeMcpConfig(configPath);
+    }
+  },
+  60_000,
+);

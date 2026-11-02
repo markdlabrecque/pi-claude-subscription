@@ -12,7 +12,7 @@ import {
   type AssistantMessageEventStream,
   type Model,
 } from "@earendil-works/pi-ai";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { streamViaCli } from "./src/provider.js";
 import { createEventBridge } from "./src/event-bridge.js";
@@ -99,19 +99,17 @@ export default function (pi: ExtensionAPI) {
     if (!validateCliAuth()) recordStartup("failure", "auth_unavailable"); // warns if not authenticated
 
     const models = filterLatestPerFamily(
-      anthropicProvider()
-        .getModels()
-        .map((model) => ({
-          id: model.id,
-          name: model.name,
-          reasoning: model.reasoning,
-          input: model.input,
-          cost: model.cost,
-          contextWindow: model.contextWindow,
-          maxTokens: model.maxTokens,
-          inputLimits: model.inputLimits,
-          thinkingLevelMap: getCliThinkingLevelMap(model),
-        })),
+      getBuiltinModels("anthropic").map((model) => ({
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        input: model.input,
+        cost: model.cost,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        inputLimits: model.inputLimits,
+        thinkingLevelMap: getCliThinkingLevelMap(model),
+      })),
     );
 
     pi.registerProvider(PROVIDER_ID, {

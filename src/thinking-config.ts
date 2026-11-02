@@ -14,7 +14,7 @@ import type {
   Model,
   ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 
 /** CLI effort levels accepted by the --effort flag */
 export type CliEffortLevel = "low" | "medium" | "high" | "max";
@@ -110,9 +110,9 @@ export function mapThinkingEffort(
     // A family substring is not evidence of max support. Dated catalog IDs
     // share the capability of their undated model, not arbitrary future models.
     const id = modelId?.replace(/-\d{8}$/, "");
-    const model = anthropicProvider()
-      .getModels()
-      .find((m) => m.id.replace(/-\d{8}$/, "") === id);
+    const model = getBuiltinModels("anthropic").find(
+      (m) => m.id.replace(/-\d{8}$/, "") === id,
+    );
     if (model?.thinkingLevelMap?.max !== "max") {
       throw new Error(
         `CLI max effort is not verified for model ${modelId ?? "(unspecified)"}`,

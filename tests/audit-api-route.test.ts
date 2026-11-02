@@ -20,13 +20,13 @@ vi.mock("../src/audit", () => ({
     },
   }),
 }));
-vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
-  anthropicProvider: () => ({
-    getModels: () => [],
-  }),
+vi.mock("@earendil-works/pi-ai/providers/all", () => ({
+  getBuiltinModels: () => [],
 }));
-vi.mock("@earendil-works/pi-ai/api/anthropic-messages", () => ({
-  streamSimple: (...args: unknown[]) => fake.stream(...args),
+vi.mock("@earendil-works/pi-ai/compat", () => ({
+  anthropicMessagesApi: () => ({
+    streamSimple: (...args: unknown[]) => fake.stream(...args),
+  }),
 }));
 
 const SECRET = "SYNTHETIC-API-KEY-PROMPT-OUTPUT-ERROR";
