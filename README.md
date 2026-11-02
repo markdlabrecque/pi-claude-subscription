@@ -26,7 +26,17 @@ Host SDKs remain wildcard peers as required by Pi package loading. That metadata
 
 ## Setup
 
-The [v0.4.0 GitHub release](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v0.4.0) contains the Pi 1.x migration and cache fixes. It was not published to npm because registry authentication was missing. Git distribution does not depend on npm publication, but it does not bypass the [known Pi 1.4.0 loader failure](docs/pi-1x-verification.md#packed-tarball-load-38). Confirm the provider loads in your actual Pi installation before relying on it.
+Releases are GitHub-only. Install this extension from Git or a local checkout, not from npm or the Pi package gallery. npm publication would require a separate future decision and workflow change; registry credentials are not a release prerequisite.
+
+The [v0.4.0 GitHub release](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v0.4.0) contains the Pi 1.x migration and cache fixes. Git distribution does not bypass the [known Pi 1.4.0 loader failure](docs/pi-1x-verification.md#packed-tarball-load-38). Confirm the provider loads in your actual Pi installation before relying on it.
+
+With Pi installed, install the tagged Git source:
+
+```bash
+pi install git:github.com/markdlabrecque/pi-claude-subscription@v0.4.0
+```
+
+This pins v0.4.0. `pi update --extensions` reconciles installed packages but does not advance a pinned tag or commit. To adopt a later release, repeat `pi install` with its tag after reviewing its release notes and compatibility checks. For local checkouts, update the checkout yourself and rerun `npm ci`; Pi does not copy or update local source.
 
 For local checkout development:
 
@@ -41,6 +51,12 @@ Run `npm ci` from this repository. `pi install .` adds the local checkout to you
 Then select a model via `/model` in the interactive UI. Haiku, Sonnet, Opus and Fable are listed under the `pi-claude-subscription` provider.
 
 It can be installed alongside `pi-claude-cli`: the provider ID, API name and temp file names differ.
+
+## Release checks
+
+Pushing a `v*` tag runs `.github/workflows/publish.yml`. The tag must match `package.json`; style, typechecking and the offline test suite must pass before GitHub release creation. Only the release job has `contents: write`; validation has read-only access. No npm publication, registry token or OIDC permission is used. Dependency installation still downloads packages through `npm ci`; it is not an offline operation.
+
+`npm test -- tests/release-workflow.test.ts` checks the workflow structure and executes its version check with matching and mismatched synthetic tag refs. It does not push a tag, create a release, invoke the real Claude CLI or require registry credentials. The actual stable release is coordinated separately in [#78](https://github.com/markdlabrecque/pi-claude-subscription/issues/78); this workflow change does not resolve loading in [#76](https://github.com/markdlabrecque/pi-claude-subscription/issues/76).
 
 ## Settings
 
