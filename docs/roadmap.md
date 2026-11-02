@@ -4,6 +4,12 @@ Reconciled on 2026-11-01 against `main` at `8f8b45b`, the v0.4.0 GitHub release,
 
 The #76 branch fix now passes the real Pi 1.4.0 SDK loader for packed installs and Git/local checkouts, without skips or model requests. The v0.4.0 tag still contains the old import defect. See [loading verification and limitations](pi-1x-verification.md#packed-tarball-load-38). This is not certification of every host or live workflow.
 
+## v1.4.0 release preparation
+
+The audit implementation and review fixes, dropped-stream fix, GitHub-only release workflow and SDK loader fix are merged into the source prepared for **extension v1.4.0 stable**. The Pi SDK pair remains pinned independently to 1.4.0. This does not mean v1.4.0 has been tagged, published or installed in the maintainer's host. The [release checklist](releases/v1.4.0.md) separates fresh isolated checks from historical evidence and outstanding Linux/macOS CI and publication gates. Disable audit by unsetting `PI_CLAUDE_SUBSCRIPTION_AUDIT` or setting it to `0`; rollback options and the prior v0.4.0 limitations are recorded there.
+
+The sections below retain historical findings. In particular, the old dropped-stream follow-up is now implemented through [#77](https://github.com/markdlabrecque/pi-claude-subscription/issues/77), and the audit candidate's old skipped-loader and branch-only status do not describe the v1.4.0 source. Live acceptance remains separate in [#79](https://github.com/markdlabrecque/pi-claude-subscription/issues/79) and requires approval for each run.
+
 ## What is already done
 
 | Area                         | Closed issues and evidence                                                                                                                                                                                                                                                                                 | What this establishes                                                                                                                                                                                              |
@@ -17,7 +23,7 @@ The #76 branch fix now passes the real Pi 1.4.0 SDK loader for packed installs a
 
 [Release CI](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41323671647) passed all four Linux/macOS test, lint and typecheck jobs. [Cache acceptance](first-tool-result-cache-verification.md) used Pi SDK 1.4.0 and real Claude CLI 2.1.316. In its cold-prefix tool-first run, the first result request read all 11,288 tokens cached by the tool-call request. This is narrow live cache evidence, not an account billing or full-workflow certification.
 
-## Remaining work, despite the empty issue list
+## Historical follow-ups from the roadmap review
 
 These are evidence-backed follow-ups, not newly filed tickets or promised release dates.
 
@@ -57,7 +63,7 @@ If the billing pool needs to be identified, the remaining check is human account
 
 ## Opt-in audit implementation from review feedback
 
-The feature is implemented on `feat/local-audit`, not released as v0.4.0. `PI_CLAUDE_SUBSCRIPTION_AUDIT=1` writes privacy-safe metadata under `<extension-root>/.audit/YYYY-MM-DD.jsonl`, independently of the raw debug flag. It covers registration, request starts, observable terminal errors and successful usage/cache/version data on both routes. Unknown usage stays null. No prompts, tool content, credentials or raw stderr/errors enter the files.
+The feature was implemented on `feat/local-audit` and is now merged into the v1.4.0 release source. It was not released as v0.4.0. `PI_CLAUDE_SUBSCRIPTION_AUDIT=1` writes privacy-safe metadata under `<extension-root>/.audit/YYYY-MM-DD.jsonl`, independently of the raw debug flag. It covers registration, request starts, observable terminal errors and successful usage/cache/version data on both routes. Unknown usage stays null. No prompts, tool content, credentials or raw stderr/errors enter the files.
 
 The packaged `src/audit-loader-check.mjs` records an explicit SDK load check in the same directory without sending a model request. The #76 branch fix resolves the known import defect for the pinned SDK. Loading cannot be automatically audited by extension code that never loads; use this separate check and inspect host diagnostics for actual Pi startup failures.
 
