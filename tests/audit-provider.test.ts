@@ -179,6 +179,165 @@ describe("CLI local audit lifecycle", () => {
     },
   );
 
+  it.each(["drop", "cancel-before-drop", "cancel-after-error"])(
+    "settles a partial upstream stream promptly: %s",
+    async (race) => {
+      await setup("stream_cut_off");
+      const controller = new AbortController();
+      const stream = streamViaCli(model, context(), {
+        signal: controller.signal,
+      });
+      const terminals: string[] = [];
+      for await (const event of stream) {
+        if (event.type === "text_delta") {
+          if (race === "cancel-before-drop") controller.abort();
+          upstream!.disconnect();
+        }
+        if (event.type === "error" || event.type === "done") {
+          terminals.push(event.type);
+          if (race === "cancel-after-error") controller.abort();
+        }
+      }
+      const cancelled = race === "cancel-before-drop";
+      const result = await settled(stream, cancelled ? "aborted" : "error");
+      expect(terminals).toEqual(["error"]);
+      expect(result.content).toEqual([{ type: "text", text: NORMAL_TEXT }]);
+      expect(result.usage.input).toBe(10);
+      expect(result.usage.output).toBe(1);
+      expect(result.errorMessage).toBe(
+        cancelled
+          ? "Request was aborted"
+          : "Claude upstream connection closed before the response completed.",
+      );
+      expect(upstream!.requests).toHaveLength(1);
+      expect(terminal()).toMatchObject({
+        outcome: cancelled ? "cancelled" : "error",
+        reason: cancelled ? "cancelled" : "relay_error",
+        usage: { input: 10, output: 1 },
+        relay: { upstreamCount: 1, rejectedCount: 0 },
+        cleanup: {
+          attempted: true,
+          process: "confirmed",
+          relay: "confirmed",
+          sandbox: "confirmed",
+        },
+      });
+    },
+  );
+
+  it("keeps a completed length stop when the HTTP connection drops after message_stop", async () => {
+    await setup("stream_complete");
+    const stream = streamViaCli(model, context(), {
+      onProviderStreamEvent: (event) => {
+        if ((event as { type: string }).type === "message_stop")
+          upstream!.disconnect();
+      },
+    });
+    const terminals: string[] = [];
+    for await (const event of stream) {
+      if (event.type === "done" || event.type === "error")
+        terminals.push(event.type);
+    }
+    const result = await settled(stream, "length");
+    expect(terminals).toEqual(["done"]);
+    expect(result.content).toEqual([{ type: "text", text: NORMAL_TEXT }]);
+    expect(terminal()).toMatchObject({
+      outcome: "success",
+      reason: "length",
+      usage: { input: 10, output: 5 },
+    });
+  });
+
+  it("accepts completion still buffered in the CLI when the transport drops", async () => {
+    await setup("stream_complete");
+    vi.stubEnv("FAKE_CLAUDE_STREAM_STOP_DELAY_MS", "50");
+    const stream = streamViaCli(model, context());
+    const terminals: string[] = [];
+    for await (const event of stream) {
+      if (event.type === "text_delta") upstream!.disconnect();
+      if (event.type === "done" || event.type === "error")
+        terminals.push(event.type);
+    }
+    const result = await settled(stream, "length");
+    expect(terminals).toEqual(["done"]);
+    expect(result.content).toEqual([{ type: "text", text: NORMAL_TEXT }]);
+    expect(terminal()).toMatchObject({
+      outcome: "success",
+      reason: "length",
+      usage: { input: 10, output: 5 },
+      relay: { upstreamCount: 1 },
+    });
+  });
+
+  it.each(["stream_complete", "stream_usage_cut_off"] as const)(
+    "drains queued completion and usage past a stuck observer after %s drops",
+    async (scenario) => {
+      await setup(scenario);
+      let release!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const stream = streamViaCli(model, context(), {
+        onProviderStreamEvent: (event) => {
+          // Hold the first event so text, usage and completion queue behind it.
+          if ((event as { type: string }).type === "message_start") {
+            upstream!.disconnect();
+            return paused;
+          }
+        },
+      });
+      const events: string[] = [];
+      for await (const event of stream) events.push(event.type);
+      const complete = scenario === "stream_complete";
+      const result = await settled(stream, complete ? "length" : "error");
+      expect(
+        events.filter((type) => type === "done" || type === "error"),
+      ).toEqual([complete ? "done" : "error"]);
+      expect(result.content).toEqual([{ type: "text", text: NORMAL_TEXT }]);
+      expect(result.usage.output).toBe(5);
+      expect(terminal()).toMatchObject({
+        outcome: complete ? "success" : "error",
+        reason: complete ? "length" : "relay_error",
+        usage: { input: 10, output: 5 },
+        relay: { upstreamCount: 1, rejectedCount: 0 },
+        cleanup: {
+          process: "confirmed",
+          relay: "confirmed",
+          sandbox: "confirmed",
+        },
+      });
+      const snapshot = JSON.stringify(result);
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(JSON.stringify(result)).toBe(snapshot);
+    },
+  );
+
+  it.each([
+    ["429_cut_off", 429, "Claude rate limit reached; retry after 30s."],
+    ["529_cut_off", 529, "Claude API returned 529 (overloaded)."],
+  ] as const)(
+    "keeps the known HTTP failure when %s drops during a response hook",
+    async (scenario, status, errorMessage) => {
+      await setup(scenario);
+      const stream = streamViaCli(model, context(), {
+        onResponse: () => {
+          upstream!.disconnect();
+          return new Promise<void>(() => {});
+        },
+      });
+      const result = await settled(stream);
+      expect(result.errorMessage).toBe(errorMessage);
+      expect(terminal()).toMatchObject({
+        outcome: "error",
+        reason: "http_error",
+        http: { status, retryAfter: "30" },
+        relay: { upstreamCount: 1 },
+      });
+      expect(upstream!.requests).toHaveLength(1);
+    },
+  );
+
   it("respects scoped opt-out and subsequent scoped opt-in, independent of ambient env", async () => {
     await setup();
     await streamViaCli(model, context(), {
