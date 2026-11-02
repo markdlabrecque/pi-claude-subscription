@@ -11,8 +11,10 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+// Pi 1.4.0 aliases only selected SDK entrypoints in its extension loader.
+// compat exposes the lazy API factory without an unsupported subpath import.
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/compat";
 import { envFlag, resolveEnv } from "./env-flag.js";
 import {
   startAuditRequest,
@@ -21,6 +23,8 @@ import {
   observeAuditUsage,
   estimateAuditCost,
 } from "./audit-request.js";
+
+const { streamSimple } = anthropicMessagesApi();
 
 export const API_KEY_FALLBACK_ENV = "PI_CLAUDE_SUBSCRIPTION_API_KEY_FALLBACK";
 
@@ -46,9 +50,7 @@ export function streamViaAnthropic(
     // Models missing from the pi-ai catalog (e.g. the fable alias) are rebuilt
     // from the subscription model.
     const anthropicModel =
-      anthropicProvider()
-        .getModels()
-        .find((m) => m.id === model.id) ??
+      getBuiltinModels("anthropic").find((m) => m.id === model.id) ??
       ({
         ...model,
         provider: "anthropic",

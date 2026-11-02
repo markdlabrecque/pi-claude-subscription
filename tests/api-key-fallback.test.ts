@@ -3,13 +3,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const streamSimpleAnthropic = vi.fn(() => "anthropic-stream");
 afterEach(() => vi.unstubAllEnvs());
 
-vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
-  anthropicProvider: () => ({
-    getModels: () => [{ id: "claude-sonnet-4-5", api: "anthropic-messages" }],
-  }),
+vi.mock("@earendil-works/pi-ai/providers/all", () => ({
+  getBuiltinModels: () => [
+    { id: "claude-sonnet-4-5", api: "anthropic-messages" },
+  ],
 }));
-vi.mock("@earendil-works/pi-ai/api/anthropic-messages", () => ({
-  streamSimple: (...args: unknown[]) => (streamSimpleAnthropic as any)(...args),
+vi.mock("@earendil-works/pi-ai/compat", () => ({
+  anthropicMessagesApi: () => ({
+    streamSimple: (...args: unknown[]) =>
+      (streamSimpleAnthropic as any)(...args),
+  }),
 }));
 
 import {

@@ -80,14 +80,12 @@ const { MockAssistantMessageEventStream } = vi.hoisted(() => {
   return { MockAssistantMessageEventStream };
 });
 
-vi.mock("@earendil-works/pi-ai/providers/anthropic", () => ({
-  anthropicProvider: () => ({
-    getModels: () =>
-      mockModels.map((m) => ({
-        ...m,
-        thinkingLevelMap: m.id.includes("opus") ? { max: "max" } : undefined,
-      })),
-  }),
+vi.mock("@earendil-works/pi-ai/providers/all", () => ({
+  getBuiltinModels: () =>
+    mockModels.map((m) => ({
+      ...m,
+      thinkingLevelMap: m.id.includes("opus") ? { max: "max" } : undefined,
+    })),
 }));
 
 vi.mock("@earendil-works/pi-ai", async (importOriginal) => {

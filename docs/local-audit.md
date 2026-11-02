@@ -50,7 +50,7 @@ PI_CLAUDE_SUBSCRIPTION_AUDIT=1 \
 
 Replace the placeholder with the actual extension directory. The check uses an isolated temporary workspace and agent directory and loads only this extension. It does not call a model or provider stream. If the extension reaches registration, its normal CLI presence/authentication validation can run. This is an explicit loader check, not an automatic capture of every future Pi startup failure.
 
-An unavailable SDK import, thrown loader error or reported loader error is recorded as failure. No loaded/registered provider is recorded as skipped. Both yield exit status 1. Success requires the loader to report the extension and the expected provider registration. With audit off, the command does nothing and exits 0; that is not evidence of a successful load. The existing packaged-load defect is expected to remain a failure until separately fixed.
+An unavailable SDK import, thrown loader error or reported loader error is recorded as failure. No loaded/registered provider is recorded as skipped. Both yield exit status 1. Success requires the loader to report the extension and the expected provider registration. With audit off, the command does nothing and exits 0; that is not evidence of a successful load. The #76 branch fix resolves the packaged-load import defect against SDK 1.4.0. The v0.4.0 tag still lacks that fix. See [loading verification](pi-1x-verification.md#packed-tarball-load-38) for the tested installation paths and limitations.
 
 ## Reading the week
 

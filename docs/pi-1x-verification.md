@@ -2,7 +2,7 @@
 
 ## Current release status
 
-As of 2026-11-01, v0.4.0 is released on GitHub at commit `8f8b45b`. [Main CI run 41323671647](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41323671647) passed Linux/macOS tests, lint and typecheck. The packed-tarball loader test below remains skipped and its acceptance item is not met. The successful suite is not installation certification.
+As of 2026-11-01, v0.4.0 is released on GitHub at commit `8f8b45b`. [Main CI run 41323671647](https://github.com/markdlabrecque/pi-claude-subscription/actions/runs/41323671647) passed Linux/macOS tests, lint and typecheck. That release left the packed-tarball loader test skipped and its acceptance item unmet. The branch fix for #76 now passes packed-install and Git/local checkout loading against SDK 1.4.0, as recorded below. It is not part of the v0.4.0 tag.
 
 All 45 GitHub issues are closed. Some sections below record earlier implementation runs, not current pending tickets or fresh acceptance of the whole release. See [the reconciled roadmap](roadmap.md) and [first tool-result cache verification](first-tool-result-cache-verification.md) for later evidence. No new live request or account billing check was made for this documentation reconciliation.
 
@@ -48,10 +48,39 @@ Local re-verification of the CI-trigger change on Linux used Node 22.19.0 and th
 
 ## Packed-tarball load (#38)
 
-- Tested Pi version: 1.4.0 (`@earendil-works/pi-coding-agent@1.4.0`).
-- Result: FAILS. Loading the extension from the packed tarball with `discoverAndLoadExtensions` errors with `Cannot find module '.../pi-ai/dist/compat.js/providers/anthropic'`. Pi 1.4.0's extension loader does not resolve the `@earendil-works/pi-ai/providers/anthropic` and `@earendil-works/pi-ai/api/anthropic-messages` imports.
-- The #38 acceptance item "loads in pi from a packed tarball" is not met. It waits on a follow-up fix to the pi-ai import paths.
-- `tests/packed-tarball-load.test.ts` holds the check and is skipped until that fix lands.
+The #76 fix was verified locally on Linux with Node 24.20.0 and the exact installed pair `@earendil-works/pi-coding-agent@1.4.0` and `@earendil-works/pi-ai@1.4.0`.
+
+Before changing implementation, enabling the skipped test freshly reproduced `Cannot find module '.../pi-ai/dist/compat.js/providers/anthropic'`. Pi 1.4.0's Jiti loader aliases the SDK root to `compat.js`, so unrecognized subpaths append to that filename. This affected catalog/thinking imports as well as the eager fallback imports, regardless of the fallback flag.
+
+The fix reads the catalog from the loader-supported `@earendil-works/pi-ai/providers/all` entrypoint and obtains `anthropicMessagesApi` from the explicit `@earendil-works/pi-ai/compat` entrypoint. That factory lazily loads the Anthropic implementation on a fallback request. It does not use the legacy global registry or add Pi 0.x support.
+
+Reproduce from the fixed checkout with a fresh npm cache:
+
+```bash
+export npm_config_cache="$(mktemp -d)"
+npm ci
+npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent --depth=0
+npx vitest run tests/packed-tarball-load.test.ts
+npx vitest run tests/api-key-sdk.test.ts tests/registered-provider.test.ts tests/catalog-thinking.test.ts
+npm run test:coverage
+npm run typecheck
+npm run check-style
+```
+
+`tests/packed-tarball-load.test.ts` runs without skips. It independently checks:
+
+- A tarball created by `npm pack --json --ignore-scripts --pack-destination <temp>`, installed with `npm ci --offline --ignore-scripts --legacy-peer-deps --no-audit --no-fund` in a temporary fixture. The fixture's manifest points to the actual tarball. Its generated lockfile copies runtime dependency versions, resolved URLs and integrity hashes from the repository lockfile. The initial `npm ci` caches those exact dependency tarballs; cached registry metadata is not required. Host SDK peers are supplied by Pi, not copied or linked into the package.
+- The Git/local source checkout after `npm ci`, loaded by its package directory and manifest, not a tarball or mocked factory.
+
+Each source loads in a fresh Node subprocess through the real installed `discoverAndLoadExtensions`, using isolated workspace and agent directories. Each is tested with API fallback both disabled and enabled. Assertions require no loader errors, the expected extension entry, a registered provider with models and a streaming callback, and the shipped MCP server. A fake Claude CLI handles startup presence/auth probes. Loading checks invoke no provider stream or model request.
+
+The separate registered-provider and API-key SDK regressions use fake CLI/upstream traffic and an injected synthetic SSE transport to verify CLI text, API fallback option forwarding, cancellation and switching back to CLI. No live model or account request was authorized or sent.
+
+The original range-resolving offline install was also tested after `npm ci` with a fresh cache. It failed with `ENOTCACHED` for `cross-spawn`, despite the locked tarballs being present. The lock-backed fixture passes with that same metadata-cold cache.
+
+Local result: 591 tests across 53 files, with no skips. Coverage thresholds, typecheck and style pass. The existing CI matrix runs these checks on Linux/macOS with Node 22.19.0; remote CI for this branch has not yet run.
+
+Limitations: this establishes installed SDK loading, not npm publication, remote Git fetching, compiled/bundled Pi binaries, personal Pi configuration, arbitrary Pi-derived hosts or every later SDK. The fix is not in the v0.4.0 release. A Git-installed checkout must contain this fix; changing distribution channels alone does not repair old source.
 
 ## Third-party tools and attachments (#52)
 
