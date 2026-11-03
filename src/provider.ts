@@ -211,6 +211,8 @@ export function streamViaCli(
     let resultSeen = false;
     // What happened to this request, for the debug diagnostics record
     let diagnostics: ReturnType<typeof startRequestDiagnostics> | undefined;
+    // Whether the CLI's environment block was found and normalized
+    let environmentNormalized = false;
     // The bridge's accumulated message, so a thrown failure still keeps it
     let output: AssistantMessage | undefined;
     const seen = {
@@ -314,7 +316,7 @@ export function streamViaCli(
           if (proc) cleanupProcess(proc);
         },
         onPayload: async (payload) => {
-          normalizeCliEnvironment(payload);
+          if (normalizeCliEnvironment(payload)) environmentNormalized = true;
           try {
             return await onPayload?.(payload, model);
           } catch (error) {
@@ -746,6 +748,7 @@ export function streamViaCli(
           timedOut: seen.timedOut,
           upstreamCount: ended?.upstreamCount ?? 0,
           rejectedCount: ended?.rejectedCount ?? 0,
+          environmentNormalized,
         }));
       }
     }

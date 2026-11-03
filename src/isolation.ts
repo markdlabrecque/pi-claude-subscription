@@ -66,27 +66,43 @@ function removeDir(dir: string): Promise<SandboxCleanup> {
 }
 
 /**
- * The CLI prepends this environment reminder even with a replacement system
- * prompt. Its fresh transport cwd must not invalidate the whole replay prefix.
- * Only the leading CLI-generated block is eligible; Pi's replay turns and
- * instructions are left intact, including any real workspace changes.
+ * The CLI's environment line, in either observed shape (both CLI 2.1.316):
+ * wrapped in `<system-reminder>` at the start of messages[0] (2026-11-01), or
+ * unwrapped at the start of a later user message (2026-11-02). Only a private
+ * `pi-claude-subscription-XXXXXX` cwd matches.
  */
-export function normalizeCliEnvironment(payload: unknown): void {
+const CLI_ENVIRONMENT =
+  /^((?:<system-reminder>\n)?# Environment\nYou have been invoked in the following environment: \n - Primary working directory: )[^\r\n]*[/\\]pi-claude-subscription-[A-Za-z0-9]{6}(?=\r?\n)/;
+
+/**
+ * The CLI adds this environment reminder even with a replacement system
+ * prompt. Its fresh transport cwd must not invalidate the whole replay prefix.
+ * Only a CLI-generated block, the first block of a user message, is eligible;
+ * Pi's replay turns and instructions are left intact, including any real
+ * workspace changes. Returns whether a block was normalized, so a future
+ * format change shows up in diagnostics instead of failing silently.
+ */
+export function normalizeCliEnvironment(payload: unknown): boolean {
   const body = payload as {
     messages?: {
       role?: string;
       content?: { type?: string; text?: string }[];
     }[];
   } | null;
-  if (!body || !Array.isArray(body.messages)) return;
-  const first = body.messages[0];
-  if (first?.role !== "user" || !Array.isArray(first.content)) return;
-  const block = first.content[0];
-  if (block?.type !== "text" || typeof block.text !== "string") return;
-  block.text = block.text.replace(
-    /^(<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: )[^\r\n]*[/\\]pi-claude-subscription-[A-Za-z0-9]{6}(?=\r?\n)/,
-    "$1[private CLI transport directory, not the Pi workspace]",
-  );
+  if (!body || !Array.isArray(body.messages)) return false;
+  let normalized = false;
+  for (const message of body.messages) {
+    if (message?.role !== "user" || !Array.isArray(message.content)) continue;
+    const block = message.content[0];
+    if (block?.type !== "text" || typeof block.text !== "string") continue;
+    if (!CLI_ENVIRONMENT.test(block.text)) continue;
+    block.text = block.text.replace(
+      CLI_ENVIRONMENT,
+      "$1[private CLI transport directory, not the Pi workspace]",
+    );
+    normalized = true;
+  }
+  return normalized;
 }
 
 /** Stands in when Pi sends no prompt, so Claude Code's own never comes back. */
