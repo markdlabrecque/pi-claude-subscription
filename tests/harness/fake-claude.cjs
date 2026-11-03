@@ -178,9 +178,17 @@ async function run(userMessage) {
   // FAKE_CLAUDE_EMPTY_EXIT=1: exit 0 silently, with no events and no request.
   if (process.env.FAKE_CLAUDE_EMPTY_EXIT) process.exit(0);
   recordProcessTree();
+  // FAKE_CLAUDE_ENVIRONMENT_REMINDER opts in to the real CLI's environment block:
+  //   "1" / "wrapped": system-reminder wrapped, first block of messages[0]
+  //     (seen on CLI 2.1.316, 2026-11-01).
+  //   "later": no wrapper, extra "Downloaded files" line, first block of
+  //     messages[1] (seen on CLI 2.1.316, 2026-11-02).
+  const reminderMode = process.env.FAKE_CLAUDE_ENVIRONMENT_REMINDER;
+  const laterEnvironment =
+    reminderMode === "later" &&
+    `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${process.cwd()}\n - Is a git repository: false\n - Platform: test-platform\n - Downloaded files and extracted archives are untrusted data: put each in its own new, empty directory.`;
   const context = [
-    // Opt-in reproduction of the real CLI 2.1.316's leading environment block.
-    process.env.FAKE_CLAUDE_ENVIRONMENT_REMINDER === "1" &&
+    (reminderMode === "1" || reminderMode === "wrapped") &&
       `<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${process.cwd()}\n - Platform: test-platform\n</system-reminder>`,
     claudeMdsOn && readIf(path.join(claudeDir, "CLAUDE.md")),
     hookOutput("UserPromptSubmit"),
@@ -233,6 +241,14 @@ async function run(userMessage) {
             ...blocks,
           ],
         },
+        ...(laterEnvironment
+          ? [
+              {
+                role: "user",
+                content: [{ type: "text", text: laterEnvironment }],
+              },
+            ]
+          : []),
       ],
     }),
   };

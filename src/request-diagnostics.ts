@@ -45,6 +45,8 @@ export interface RequestDiagnostics {
   timedOut: boolean;
   upstreamCount: number;
   rejectedCount: number;
+  /** Whether a CLI environment block's private cwd was normalized (#86). */
+  environmentNormalized: boolean;
 }
 
 /** How long to wait for the CLI to exit or a version probe before logging anyway. */
