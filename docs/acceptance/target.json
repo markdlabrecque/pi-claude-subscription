@@ -1,0 +1,10 @@
+{
+  "campaignId": null,
+  "versions": {
+    "pi": "1.4.0",
+    "piCodingAgent": "1.4.0",
+    "claudeCli": "2.1.316",
+    "extension": "1.4.0"
+  },
+  "config": { "sessionMode": "replay", "apiFallback": false }
+}

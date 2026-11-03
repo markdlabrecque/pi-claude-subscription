@@ -206,7 +206,11 @@ Resume notes:
 
 ## Acceptance runs
 
-Opt-in runs against the real `claude` CLI and a real subscription. They are not part of `npm test`. `scripts/acceptance/run.ts` drives `streamViaCli` the way Pi does (Haiku, two schema-only Pi tools, short prompts), runs the tools itself, and reads the relay's own per-request log lines. `scripts/acceptance/claude-spy.cjs` sits in front of the real CLI on PATH and records only the type of each CLI output message, so Claude Code tool executions (a `user` message with a `tool_result` block) can be counted. On the host the run uses a private `CLAUDE_CONFIG_DIR` with a symlink to the existing login, so the CLI's own state stays out of `~/.claude`.
+Opt-in runs against the real `claude` CLI and a real subscription. They are not part of `npm test`, and they run only locally, never in CI. Each run needs an explicit maintainer approval file that names its host, model and scenario and sets request, token and time limits and stop conditions. Without one, the harness refuses before it spawns the CLI or touches credentials. [Live acceptance](docs/live-acceptance.md) documents the approval format, the three scenarios and their expected outcomes, the run records, and how to regenerate the [acceptance notes](docs/acceptance/notes.md) offline.
+
+No live run has been authorized for the Pi 1.x stack. Every cell of the matrix is untested: macOS and Linux × `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-1` × `tool-turns-50`, `compaction-continuation` and `fresh-container-replay`.
+
+`scripts/acceptance/run.ts` drives `streamViaCli` the way Pi does (the approved model, two schema-only Pi tools, short synthetic prompts), runs the tools itself, and reads the relay's own per-request log lines. `scripts/acceptance/claude-spy.cjs` sits in front of the real CLI on PATH and records only the type of each CLI output message, so Claude Code tool executions (a `user` message with a `tool_result` block) can be counted. On the host the run uses a private `CLAUDE_CONFIG_DIR` with a symlink to the existing login, so the CLI's own state stays out of `~/.claude`.
 
 For a real-CLI cache-prefix check without subscription traffic:
 
@@ -216,7 +220,7 @@ npx vite-node scripts/acceptance/cache-prefix.ts
 
 Add `--live` to send three requests using the existing Claude CLI login and assert that each follow-up reads at least the previous turn's cached read plus write tokens. Both modes compare consecutive request prefixes without logging payloads or credentials. [Verification evidence](docs/cache-prefix-verification.md) records the tested versions and limits.
 
-The following older runs were made on 2026-10-15, Linux, CLI 2.1.301, model `haiku`.
+The following older runs were made on 2026-10-15, Linux, CLI 2.1.301, model `haiku`, before the Pi 1.x migration and with an earlier, ungated version of the harness, so the commands below no longer apply. They are historical evidence only and have no structured run records.
 
 ### 1. 50 consecutive tool-using turns
 
