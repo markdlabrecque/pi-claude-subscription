@@ -16,7 +16,7 @@ The historical fixed shortfall of about 337 tokens was not reproduced on these v
 
 ## Fix and result
 
-Normalize only the private cwd value in the first CLI-generated environment reminder before forwarding the request and before the caller's `onPayload` hook. Do not reuse a working directory or remove instructions. The actual subprocess isolation, Pi's complete current instructions, workspace guidance, history and tool inventory remain unchanged.
+Normalize only the private cwd value in the CLI-generated environment reminder before forwarding the request and before the caller's `onPayload` hook. Do not reuse a working directory or remove instructions. The actual subprocess isolation, Pi's complete current instructions, workspace guidance, history and tool inventory remain unchanged.
 
 The first live run after the fix reported `input: 10` on every turn:
 
@@ -25,6 +25,29 @@ The first live run after the fix reported `input: 10` on every turn:
 - Turn 3: `cacheRead: 10555`, `cacheWrite: 22`.
 
 Thus both follow-ups read the full previous cached prefix. A subsequent run reused the cache, reading 10533, 10555 and 10577 tokens with zero writes. Every turn forwarded exactly one request and received HTTP 200. Neither headers nor request bodies were written to disk or logs.
+
+## Second reminder shape (issue #86)
+
+A live capture on 2026-11-02 showed the raw private cwd reaching Anthropic again. That run used Claude CLI 2.1.316 on Linux and `claude-haiku-5-5`, through `scripts/acceptance/workspace-cwd.ts` (branch `docs/adr-0003-cli-cwd`, unpushed). It was single-turn in private-cwd mode, so the cache effect was not measured. The environment block differed from the 2026-11-01 shape in three ways:
+
+- **Position:** it was the first block of `messages[1]`, not `messages[0]`.
+- **Wrapper:** it had no `<system-reminder>` wrapper.
+- **Content:** it had an extra line, "Downloaded files and extracted archives are untrusted data…".
+
+The #32 matcher accepted only the wrapped block at the start of `messages[0]`, so it never matched.
+
+**Cause: unknown.** The CLI version was the same in both runs (2.1.316), so a CLI release does not explain it. The differences between the two runs were:
+
+- the model (`claude-haiku-4-5` and then `claude-haiku-5-5`);
+- the acceptance script;
+- the private `CLAUDE_CONFIG_DIR` state;
+- any server-delivered CLI configuration.
+
+None of these was isolated. The new "Downloaded files" line suggests the CLI revised the reminder content itself, possibly through configuration delivered from the server.
+
+**Fix:** the matcher now accepts the environment line at the start of the first text block of any user message, wrapped or unwrapped. It still rewrites only a cwd ending in `pi-claude-subscription-XXXXXX`, and leaves Pi's replayed turns, assistant content and the rest of the reminder untouched. The fake CLI emits both shapes (`FAKE_CLAUDE_ENVIRONMENT_REMINDER=1` and `later`), and regression tests cover each one. The debug `request diagnostics` record now includes `environmentNormalized`. If that field is `false` on a private-cwd request, the CLI changed its format again and the cached prefix is probably being invalidated.
+
+**Live re-verification: pending.** The `--live` check has not yet been rerun against the second shape. When it is, record the CLI version, model, date and per-turn cache reads and writes here.
 
 ## Repeat
 
