@@ -9,9 +9,12 @@
  * they stay active under --setting-sources "".
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** How removing the private temp directory ended. */
+export type SandboxCleanup = "confirmed" | "failed";
 
 export interface Isolation {
   /** Fresh private temp directory to run the CLI in. */
@@ -20,8 +23,46 @@ export interface Isolation {
   args: string[];
   /** Environment variables to add to the spawn environment. */
   env: Record<string, string>;
-  /** Remove the temp directory. Safe to call more than once. */
-  cleanup(): void;
+  /**
+   * Remove the temp directory. Safe to call more than once: every call shares
+   * one attempt. Never throws or rejects, so it is safe in event handlers.
+   */
+  cleanup(): Promise<SandboxCleanup>;
+}
+
+/** Errors a busy directory can raise (e.g. a late CLI write) and outgrow. */
+const TRANSIENT_RM_ERRORS = new Set([
+  "ENOTEMPTY",
+  "EBUSY",
+  "EPERM",
+  "EMFILE",
+  "ENFILE",
+]);
+/** Waits between attempts; bounded so a stuck directory gives up quickly. */
+const RM_RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 320];
+
+/**
+ * Remove only `dir`, retrying transient failures with backoff. Removal counts
+ * only once the directory is verifiably gone. The first attempt is synchronous.
+ */
+function removeDir(dir: string): Promise<SandboxCleanup> {
+  const attempt = (retry: number): SandboxCleanup | Promise<SandboxCleanup> => {
+    let transient = true;
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      if (!existsSync(dir)) return "confirmed";
+    } catch (err) {
+      transient = TRANSIENT_RM_ERRORS.has((err as NodeJS.ErrnoException).code!);
+    }
+    if (!transient || retry >= RM_RETRY_DELAYS_MS.length) return "failed";
+    return new Promise((resolve) => {
+      setTimeout(
+        () => resolve(attempt(retry + 1)),
+        RM_RETRY_DELAYS_MS[retry],
+      ).unref?.();
+    });
+  };
+  return Promise.resolve(attempt(0));
 }
 
 /**
@@ -53,7 +94,8 @@ const FALLBACK_SYSTEM_PROMPT = "You are a helpful assistant.";
 
 export function createIsolation(systemPrompt?: string): Isolation {
   const cwd = mkdtempSync(join(tmpdir(), "pi-claude-subscription-"));
-  const cleanup = () => rmSync(cwd, { recursive: true, force: true });
+  let removal: Promise<SandboxCleanup> | undefined;
+  const cleanup = () => (removal ??= removeDir(cwd));
 
   try {
     const args = [
@@ -79,7 +121,8 @@ export function createIsolation(systemPrompt?: string): Isolation {
       cleanup,
     };
   } catch (err) {
-    cleanup();
+    // Best effort; cleanup never throws, so the setup error is what surfaces
+    void cleanup();
     throw err;
   }
 }

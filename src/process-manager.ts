@@ -15,6 +15,8 @@ const cleanupObservations = new WeakMap<
   ChildProcess,
   { process: string; sandbox: string }
 >();
+/** Bounded sandbox removal in progress, so observers see its final result. */
+const sandboxRemovals = new WeakMap<ChildProcess, Promise<void>>();
 let observedCliVersion: string | null = null;
 export const getObservedCliVersion = () => observedCliVersion;
 
@@ -33,6 +35,7 @@ export async function observeProcessCleanup(proc: ChildProcess) {
       proc.once("close", done);
     });
   }
+  await sandboxRemovals.get(proc);
   return { ...state };
 }
 
@@ -142,13 +145,15 @@ export function spawnClaude(
     proc.once("exit", () => killProcessGroup(proc));
     const cleanup = { process: "unknown", sandbox: "unknown" };
     cleanupObservations.set(proc, cleanup);
+    // Runs from event handlers: the shared, never-rejecting removal keeps a
+    // cleanup failure observable without letting it escape and crash Pi.
     const removeSandbox = () => {
-      try {
-        isolation.cleanup();
-        cleanup.sandbox = "confirmed";
-      } catch {
-        cleanup.sandbox = "failed";
-      }
+      sandboxRemovals.set(
+        proc,
+        isolation.cleanup().then((result) => {
+          cleanup.sandbox = result;
+        }),
+      );
     };
     proc.once("close", () => {
       cleanup.process = "confirmed";
@@ -157,7 +162,8 @@ export function spawnClaude(
     proc.once("error", removeSandbox);
     return proc as ChildProcess;
   } catch (err) {
-    isolation.cleanup();
+    // Never throws, so the spawn error is what surfaces
+    void isolation.cleanup();
     throw err;
   }
 }
