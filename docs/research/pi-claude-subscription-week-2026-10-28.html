@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude through Pi: October 21 to 28 transcript findings</title>
+<style>
+:root{color-scheme:dark;--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--border:#2a2f3a;--fg:#e6e8ee;--muted:#9aa3b2;--accent:#7aa2f7;--ok:#9ece6a;--warn:#e0af68;--bad:#f7768e}
+[data-theme=light]{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--panel2:#f0f2f5;--border:#d9dde5;--fg:#1c2230;--muted:#5b6474;--accent:#2f5fd1;--ok:#2e8b3d;--warn:#94620f;--bad:#b32c3d}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 system-ui,sans-serif}a{color:var(--accent)}.layout{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr)}nav{position:sticky;top:0;height:100vh;overflow:auto;padding:25px 20px;background:var(--panel);border-right:1px solid var(--border)}nav a{display:block;padding:7px 0;font-size:13px;text-decoration:none}nav strong{font-size:14px}main{min-width:0;max-width:1140px;padding:32px 42px 70px}h1{font-size:clamp(28px,4vw,40px);line-height:1.15;letter-spacing:-.035em;max-width:900px}h2{font-size:23px;line-height:1.3;margin-top:48px;padding-top:22px;border-top:1px solid var(--border);scroll-margin-top:20px}p,li,td,th,blockquote,code{overflow-wrap:anywhere}p,li{max-width:88ch}li{margin:8px 0}code{font:13px/1.55 ui-monospace,monospace;color:var(--accent)}strong{font-weight:650}blockquote{border-left:3px solid var(--warn);background:var(--panel);margin:20px 0;padding:4px 20px}.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px;margin:20px 0}table{border-collapse:collapse;width:100%;font-size:14px;background:var(--panel)}td,th{text-align:left;vertical-align:top;padding:12px 14px;border-bottom:1px solid var(--border)}th{background:var(--panel2)}tbody tr:last-child td{border-bottom:0}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:24px 0}.kpi{min-width:0;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:15px}.kpi b{display:block;font-size:29px;line-height:1.2}.kpi span{font-size:12px;color:var(--muted)}.note{color:var(--muted);font-size:13px}.eyebrow{font-size:12px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}button{border:1px solid var(--border);background:var(--panel2);color:var(--fg);border-radius:6px;padding:8px 12px;cursor:pointer;margin:14px 0}.decision{padding:18px 22px;background:var(--panel);border-left:4px solid var(--warn);border-radius:5px}.decision p{margin:0}footer{margin-top:45px;padding-top:20px;border-top:1px solid var(--border)}:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+@media(max-width:900px){.layout{grid-template-columns:minmax(0,1fr)}nav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--border)}nav .links{display:none}main{padding:24px 20px 60px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}td,th{padding:10px;font-size:13px}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}@media print{nav{display:none}.layout{display:block}main{max-width:none;padding:0}.kpi,table,blockquote,.decision{background:transparent}body{background:white;color:black}a,code{color:black}.table-wrap{overflow:visible}h2{break-after:avoid}}
+</style></head>
+<body><div class="layout"><nav aria-label="Report sections"><strong>Claude through Pi</strong><div class="note">Seven days of retained evidence</div><button id="theme" type="button" aria-label="Toggle light and dark theme">Light / dark</button><div class="links"><a href="#section-1">Scope and method</a><a href="#section-2">Measurements</a><a href="#section-3">1. Pi instructions disappear in the current provider path</a><a href="#section-4">2. The private CLI directory becomes the model&#39;s apparent workspace</a><a href="#section-5">3. A blank reply is recorded as success, immediately before a model switch</a><a href="#section-6">4. Cache reuse is good, but irrelevant history still inflates requests</a><a href="#section-7">5. Some extra work came from losing detail in batched output</a><a href="#section-8">6. Success flags alone hide ordinary command failures too</a><a href="#section-9">7. Useful work did get through the extension</a><a href="#section-10">Limits and interpretation</a><a href="#section-11">Evidence index</a></div><a href="pi-claude-subscription-week-2026-10-28.md">Markdown report</a></nav>
+<main><div class="eyebrow">Private local research · October 28, 2026</div>
+<div class="kpis" aria-label="Key measurements"><div class="kpi"><b>6</b><span>matching sessions</span></div><div class="kpi"><b>42</b><span>Sonnet responses</span></div><div class="kpi"><b>6.9 s</b><span>median response duration</span></div><div class="kpi"><b>80.9%</b><span>input tokens read from cache</span></div></div>
+<div class="decision"><p><strong>The priority is fidelity, not cache tuning.</strong> Current code drops Pi system instructions. A recorded blank reply appears as a successful completion. These findings deserve more weight than the small sample's low response times.</p></div>
+<h1>Claude through Pi: transcript findings for October 21 to 28, 2026</h1>
+<p>The biggest concern is whether Claude receives Pi&#39;s instructions and workspace context correctly. Caching is working in this sample. Instruction loss, misleading workspace information, and an empty response recorded as success are stronger reasons for investigation than request speed alone.</p>
+<h2 id="section-1">Scope and method</h2>
+<p>Window: October 21, 2026 at 07:55:53 PDT through October 28 at 07:55:53 PDT, a rolling seven days. Filtered by each message&#39;s timestamp and exact provider/API identity, <code>pi-claude-subscription</code>, rather than file modification time or mentions of Claude.</p>
+<p>I scanned 556 saved Pi session files. Six contained matching responses. I also checked 17 runtime JSONL files and project-local orchestration log candidates under <code>.mill</code>, <code>.orch</code>, <code>.pi</code>, and session directories. No additional matching provider responses appeared. Direct Claude Code logs and OpenAI worker events were excluded. The project scan&#39;s 975 candidates included some fixtures, so that count is a search inventory, not a conversation denominator.</p>
+<p>All 42 matching responses record <code>claude-sonnet-5-5</code>. There are no Haiku, Opus, or Fable responses in this window. Five sessions have substantive replies; the sixth has one empty reply. The selected records have no duplicate assistant entries or branch points. Mixed-model sessions were separated at the message level. Successful subagent sessions can be deleted, so this is an analysis of retained evidence, not a census of every request.</p>
+<p>Times below are PDT. Source references such as S4:L8 refer to original JSONL line numbers, with paths at the end.</p>
+<h2 id="section-2">Measurements</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Measure</th>
+<th align="right">Recorded value</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Matching sessions</td>
+<td align="right">6</td>
+<td>Only two dates have matching responses, October 22 and 24</td>
+</tr>
+<tr>
+<td>Assistant responses</td>
+<td align="right">42</td>
+<td>27 tool-using responses and 15 terminal <code>stop</code> responses</td>
+</tr>
+<tr>
+<td>User turns answered by this provider</td>
+<td align="right">15</td>
+<td>14 nonempty final replies and one empty reply, not an independently verified task-success rate</td>
+</tr>
+<tr>
+<td>Tool calls</td>
+<td align="right">29</td>
+<td>Every saved call is named <code>bash</code></td>
+</tr>
+<tr>
+<td>Explicit assistant errors/aborts</td>
+<td align="right">0</td>
+<td>Not proof of zero failures, see error-handling finding</td>
+</tr>
+<tr>
+<td>Empty final replies</td>
+<td align="right">1</td>
+<td>Empty content and zero recorded usage, marked <code>stop</code></td>
+</tr>
+<tr>
+<td>Tool results marked <code>isError</code></td>
+<td align="right">3 of 29</td>
+<td>Includes a successful cleanup check that found no remaining core file</td>
+</tr>
+<tr>
+<td>Median response duration</td>
+<td align="right">6.921 seconds</td>
+<td>Provider-stream duration, not time to first token</td>
+</tr>
+<tr>
+<td>Longest response duration</td>
+<td align="right">17.434 seconds</td>
+<td>This sample contains no recorded long stall</td>
+</tr>
+<tr>
+<td>Sum of response durations</td>
+<td align="right">329.749 seconds</td>
+<td>Excludes time spent by the human; does not include whole-task tool execution time</td>
+</tr>
+<tr>
+<td>Input-side tokens</td>
+<td align="right">917,747</td>
+<td>Cumulative input + cache reads + cache writes, not unique context</td>
+</tr>
+<tr>
+<td>Cache-read tokens</td>
+<td align="right">742,315</td>
+<td>80.9% of cumulative input-side tokens</td>
+</tr>
+<tr>
+<td>Cache-write tokens</td>
+<td align="right">175,350</td>
+<td>New or rewritten cached input</td>
+</tr>
+<tr>
+<td>Uncached input tokens</td>
+<td align="right">82</td>
+<td>Not the total amount of prompt context</td>
+</tr>
+<tr>
+<td>Output tokens</td>
+<td align="right">23,266</td>
+<td>Includes any usage counted as output by the provider</td>
+</tr>
+</tbody></table></div>
+<p>The stored cost totals $0.74543. This is a catalog-price estimate, not a subscription bill, quota measurement, or measured saving. Replay/resume mode and historical extension revision are not recorded in these transcripts.</p>
+<h2 id="section-3">1. Pi instructions disappear in the current provider path</h2>
+<p>All 29 tool calls use <code>bash</code>, including file reads with <code>cat</code> and <code>sed</code>, edits with <code>sed -i</code>, and file creation through heredocs. None calls Pi&#39;s <code>read</code>, <code>edit</code>, <code>write</code>, <code>grep</code>, <code>find</code>, <code>codemode</code>, or subagent tools. Pi&#39;s saved system messages list these tools and include the explicit rule, &quot;Use read to examine files instead of cat or sed.&quot; Sources: S1:L4-L13, S2:L4-L41, S4:L4-L29.</p>
+<p>That observation alone would not prove a provider bug. The source audit and a local probe supply stronger evidence:</p>
+<ul>
+<li>Modern Pi passes system instructions as messages with <code>role: system</code>, including named sections.</li>
+<li><code>src/prompt-builder.ts:493-535</code> reads the legacy <code>context.systemPrompt</code> field instead.</li>
+<li><code>src/prompt-builder.ts:231-259</code> ignores system-role messages during replay.</li>
+<li>The fallback reads one nearest <code>AGENTS.md</code>, or the global file if no nearer one exists. It does not recreate Pi&#39;s combined instructions. It also rewrites <code>.pi</code> references to <code>.claude</code>. See <code>src/prompt-builder.ts:648-678</code>.</li>
+</ul>
+<p>I passed the actual recorded system message from S3 into today&#39;s prompt-builder functions, with a harmless synthetic user message. No CLI or model was invoked. The outgoing result omitted the read-tool instruction, the recorded cwd section, and the available-skills catalog. It retained the user marker. The generated system text was only 815 characters.</p>
+<p><strong>Confirmed:</strong> the current code loses these normalized Pi instructions. <strong>Not established:</strong> which exact code a long-lived process loaded for every historical response, or whether this accounts for every bash choice. The saved name <code>bash</code> also cannot distinguish a native Claude <code>Bash</code> proposal from an MCP proposal because both normalize to it.</p>
+<p>This makes <a href="https://github.com/markdlabrecque/pi-claude-subscription/issues/39">version support issue #39</a> a behavior-correctness question, not only a dependency-version decision. The installed Pi is 1.4.0; the extension declares 0.52 peers.</p>
+<h2 id="section-4">2. The private CLI directory becomes the model&#39;s apparent workspace</h2>
+<p>In a session whose saved cwd is the Sawmill checkout, Claude said:</p>
+<blockquote>
+<p>One caveat is that my working directory is <code>/tmp/pi-claude-subscription-7MrgV8</code>, which isn&#39;t a git repo.</p>
+</blockquote>
+<p>Source: S3:L1 and L7. The user pasted this into the extension-building conversation, where the agent noticed the mismatch but guessed it was probably harmless. Source: S2:L46-L47.</p>
+<p>The current extension deliberately starts the CLI in a private temporary directory. See <code>src/isolation.ts:28-46</code> and <code>src/process-manager.ts:81-101</code>. That isolation keeps host configuration out, but the loss of Pi&#39;s cwd section removes the countervailing explanation of the real workspace.</p>
+<p>A later ticket-reading conversation began with <code>cd ~</code> and then three repo-scoped <code>gh-axi</code> calls. All three returned &quot;not a git repository.&quot; The agent then retried with an explicit repository and later fetched the full ticket bodies. Sources: S4:L7-L12.</p>
+<p>The direct cause of those three failures was the command&#39;s explicit <code>cd ~</code>; they do not prove Pi executed its tools in the CLI&#39;s temporary directory. The broader observation is that Claude had the wrong workspace model and spent a round recovering repo context. Keeping CLI isolation while accurately forwarding Pi&#39;s real tool cwd is the relevant design goal.</p>
+<h2 id="section-5">3. A blank reply is recorded as success, immediately before a model switch</h2>
+<p>On October 24 at 16:02:53, the foreman request produced:</p>
+<ul>
+<li><code>content: []</code></li>
+<li>Zero input, output, cache, and cost counters</li>
+<li><code>stopReason: stop</code></li>
+<li>No error message</li>
+<li>Duration of 3.129 seconds</li>
+</ul>
+<p>At 16:02:59, 5.964 seconds later, the session changed to OpenAI. Sources: S5:L5-L8. The timing suggests friction but does not establish why the user switched.</p>
+<p>The current provider has a matching failure shape. Its bridge begins with empty content, zero usage, and <code>stop</code>. The normal close path can return that untouched message without requiring a recognized successful completion. The empty-thinking guard requires at least one content block, so it misses a zero-block reply. Sources: <code>src/event-bridge.ts:79-97</code>, <code>src/provider.ts:401-485</code>. Early cancellation is another possible source of an empty successful result. These mechanisms were identified statically; the historical failure was not reproduced against the CLI.</p>
+<p>There is a wider observability problem. <code>endStreamWithError</code> reports several non-HTTP failures as <code>done/stop</code>; existing partial content can hide the accompanying error text. Source: <code>src/provider.ts:232-267</code>. Therefore the sample&#39;s zero explicit assistant errors is not a clean reliability result. Zero recorded tokens also does not prove the upstream service did no work.</p>
+<h2 id="section-6">4. Cache reuse is good, but irrelevant history still inflates requests</h2>
+<p>Cache reads account for 80.9% of input-side tokens. There is no evidence here of every request rewriting the entire history without cache reuse.</p>
+<p>The largest avoidable expansion came from a broad shell search while setting up <code>gh-axi</code>. A grep across <code>~/.codex/*</code> matched <code>history.jsonl</code> and returned old conversation text. One tool result was 46,612 characters. The next request&#39;s input-side context grew from 10,482 to 29,648 tokens. Sources: S2:L14-L17. This is an example of irrelevant transcript material entering another transcript through tool output.</p>
+<p>By the end of that conversation the input-side context was 46,545 tokens. After a roughly 4.5-hour pause, a request recorded zero cache reads and 43,233 cache-write tokens. Sources: S2:L35-L37 and L47. This is consistent with a cold cache after idle time, but the transcript does not identify the retention policy or prove the cause.</p>
+<p>The useful distinction is between cache efficiency and context quality. A cached prompt can still be mostly unnecessary material. Narrow searches of the actual hook files would have avoided the history import. These measurements do not justify switching to resume mode or estimating a subscription-quota saving.</p>
+<h2 id="section-7">5. Some extra work came from losing detail in batched output</h2>
+<p>The ticket-reading session required three batches before it could answer: the wrong-directory batch, a retry that returned truncated issue bodies, and a final fetch using <code>--full</code>. Sources: S4:L7-L13.</p>
+<p>Later, one shell batch added labels to four tickets, removed <code>needs-triage</code> from one, and set dependencies. Its output showed the intermediate two-label state, then the final <code>ready-for-agent</code> state. The assistant misread the intermediate state as the result of the removal and asked permission to remove the label again. The user replied &quot;yes on both,&quot; also approving a separate wording change. Sources: S4:L25-L30.</p>
+<p>This is a concrete agent/output-reading mistake, not evidence of dropped tool results in the extension. Unlabeled lines in the shell batch made the mistake easier. Explicit per-operation labels and a final authoritative read-back would have made the result clearer.</p>
+<h2 id="section-8">6. Success flags alone hide ordinary command failures too</h2>
+<p>Only three tool results have <code>isError: true</code>. That is not a meaningful task-failure rate:</p>
+<ul>
+<li>One merely confirms the extracted crash core was cleaned up. S1:L13-L14.</li>
+<li>The three failed repo lookups are inside a pipeline whose tool result is <code>isError: false</code>. S4:L7-L8.</li>
+<li>The first typecheck attempt prints TypeScript error TS6064 and <code>exit 1</code>, but its shell tool result is also <code>isError: false</code>. A later attempt succeeds. S2:L39-L42.</li>
+</ul>
+<p>For future transcript measurements, assistant terminal status, tool status, command output, and whether the task reached a substantive result need to remain separate. Otherwise a report will count blank completions as success and cleanup checks as failure.</p>
+<h2 id="section-9">7. Useful work did get through the extension</h2>
+<p>The sample is small, but it is not just unsuccessful experimentation:</p>
+<ul>
+<li>The crash investigation reached a substantive diagnostic answer in 35.8 seconds, without attributing the application crash to this extension. S1:L5-L15.</li>
+<li>The <code>pi-gh-axi</code> extension was written, typechecked in a later user-requested turn, and exercised in two fresh Pi sessions. S2:L26-L47, S3:L5-L7, S6:L5-L7.</li>
+<li>The hidden <code>gh-axi-context</code> message demonstrably reached Claude. The fresh-session responses accurately describe its snapshot. This is narrower evidence than saying all system context works; Pi converts custom messages to user messages. See installed Pi <code>docs/message-types.md</code>, CustomMessage.</li>
+<li>Ticket edits and dependencies were followed by recorded read-backs. The initial ticket answer took 34.5 seconds, including its unnecessary recovery calls. S4:L5-L13 and L14-L31.</li>
+</ul>
+<p>Fourteen of fifteen user turns received nonempty final replies. That shows the bridge supports useful multi-step work, but neither the number nor the fast response times establishes answer correctness. Missing instructions may itself make a request lighter.</p>
+<h2 id="section-10">Limits and interpretation</h2>
+<p>This is only six sessions, heavily concentrated in <code>gh-axi</code> setup and ticket maintenance. It cannot establish model-family differences, long-session stability, compaction behavior, quota consumption, time-to-first-token, or performance relative to direct Claude Code or OpenAI. No controlled comparison was run. The later AMD/NVIDIA correction in S3 belongs to OpenAI and was excluded from findings about this extension.</p>
+<p>No matching extension responses appear after October 24 at 16:02 in the retained sources. That establishes absence from these records, not the reason for using another provider or proof that no unrecorded requests occurred.</p>
+<p>The source audit is against current <code>main</code> at <code>44145425b3074c247bd5bf2f4565d4817a68e5b3</code>, whose commit predates the window. A commit date does not prove deployment. The prompt probe establishes current function behavior; historical raw CLI output and relay request diagnostics were not available in the selected sessions.</p>
+<p>My priority from this evidence is faithful Pi instruction/workspace forwarding and truthful completion status before cache tuning. No extension code, settings, tickets, or production systems were changed.</p>
+<h2 id="section-11">Evidence index</h2>
+<p>All paths are under <code>/home/mark/.pi/agent/sessions/</code>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Ref</th>
+<th>Original relative path</th>
+<th align="right">Claude responses</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>S1</td>
+<td><code>--home-mark-Work--/2026-10-22T13-29-33-995Z_01a163cd-7e2a-762a-841e-9cffc2e6fa9e.jsonl</code></td>
+<td align="right">5</td>
+</tr>
+<tr>
+<td>S2</td>
+<td><code>--home-mark-Projects-sawmill-code-develop--/2026-10-24T15-34-06-949Z_01a16e8c-3d64-720d-b508-b05339c83dfd.jsonl</code></td>
+<td align="right">21</td>
+</tr>
+<tr>
+<td>S3</td>
+<td><code>--home-mark-Projects-sawmill-code-develop--/2026-10-24T20-27-35-162Z_01a16f98-eb7a-74f7-b85d-7a9196f07fdf.jsonl</code></td>
+<td align="right">1</td>
+</tr>
+<tr>
+<td>S4</td>
+<td><code>--home-mark-Projects-sawmill-code-develop--/2026-10-24T21-54-41-423Z_01a16fe8-aa8e-76e4-9bab-51d5c6a6c5dd.jsonl</code></td>
+<td align="right">13</td>
+</tr>
+<tr>
+<td>S5</td>
+<td><code>--home-mark-Projects-sawmill-code-develop--/2026-10-24T23-02-46-696Z_01a17027-00a8-73c4-a812-1f6d12b7aca6.jsonl</code></td>
+<td align="right">1</td>
+</tr>
+<tr>
+<td>S6</td>
+<td><code>--home-mark-.config-sawmill--/2026-10-24T20-26-33-671Z_01a16f97-fb46-7317-a7a0-5bf2b0721c06.jsonl</code></td>
+<td align="right">1</td>
+</tr>
+</tbody></table></div>
+<p>Analysis scratch files are at <code>/tmp/pi-claude-week-2026-10-28/</code>: <code>analyze.py</code>, <code>metrics.json</code>, <code>prompt-probe.ts</code>, and <code>code-audit.md</code>. Scratch evidence includes private transcript text and is not intended for publication. This report is stored in the personal research directory, outside the extension repository. No report or transcript was published.</p>
+
+<footer class="note">Design source: the existing repository comparison report, using its dark/light palette and table styling. No third-party assets, telemetry, or transcript uploads. This page contains selected findings, not a transcript export.</footer>
+</main></div><script>document.getElementById('theme').addEventListener('click',()=>{document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'});</script></body></html>
