@@ -47,7 +47,7 @@ None of these was isolated. The new "Downloaded files" line suggests the CLI rev
 
 **Fix:** the matcher now accepts the environment line at the start of the first text block of any user message, wrapped or unwrapped. It still rewrites only a cwd ending in `pi-claude-subscription-XXXXXX`, and leaves Pi's replayed turns, assistant content and the rest of the reminder untouched. The fake CLI emits both shapes (`FAKE_CLAUDE_ENVIRONMENT_REMINDER=1` and `later`), and regression tests cover each one. The debug `request diagnostics` record now includes `environmentNormalized`. If that field is `false` on a private-cwd request, the CLI changed its format again and the cached prefix is probably being invalidated.
 
-**Live re-verification: pending.** The `--live` check has not yet been rerun against the second shape. When it is, record the CLI version, model, date and per-turn cache reads and writes here.
+**Live re-verification: pending.** The `--live` check has not been rerun against the second shape, so live correctness of this fix is not established. The maintainer deferred live proof for this delivery to [issue #89](https://github.com/markdlabrecque/pi-claude-subscription/issues/89). That issue owns the manual procedure and evidence, including two known limits of the current script: it hardcodes `claude-haiku-4-5`, which may not produce the second shape, and its exact-prefix byte check compares only `messages[0]`, so an unnormalized cwd in a later message would be caught only by the cache-read assertion. When the check is run, record the CLI version, model, date, observed reminder shape and per-turn cache reads and writes here.
 
 ## Repeat
 
