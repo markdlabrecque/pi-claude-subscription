@@ -59,7 +59,7 @@ describe("mapThinkingEffort", () => {
     });
   });
 
-  describe("Opus model mapping (elevated)", () => {
+  describe("Opus model mapping (same as standard)", () => {
     const model = "claude-opus-4-6-20260301";
 
     it("maps minimal to low", () => {
@@ -70,16 +70,18 @@ describe("mapThinkingEffort", () => {
       expect(mapThinkingEffort("low", model, undefined)).toBe("low");
     });
 
-    it("maps medium to high (shifted up)", () => {
-      expect(mapThinkingEffort("medium", model, undefined)).toBe("high");
+    it("maps medium to medium", () => {
+      expect(mapThinkingEffort("medium", model, undefined)).toBe("medium");
     });
 
-    it("maps high to max (shifted up)", () => {
-      expect(mapThinkingEffort("high", model, undefined)).toBe("max");
+    it("maps high to high", () => {
+      expect(mapThinkingEffort("high", model, undefined)).toBe("high");
     });
 
-    it("maps xhigh to max", () => {
-      expect(mapThinkingEffort("xhigh", model, undefined)).toBe("max");
+    it("reaches max through explicit max", () => {
+      expect(mapThinkingEffort("max", "claude-opus-5-5", undefined)).toBe(
+        "max",
+      );
     });
   });
 
