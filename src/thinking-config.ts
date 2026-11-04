@@ -2,8 +2,8 @@
  * Thinking effort configuration for mapping pi's ThinkingLevel to Claude CLI --effort flags.
  *
  * Maps pi's reasoning levels (minimal/low/medium/high/xhigh) to the CLI's effort
- * levels (low/medium/high/max). Opus models get an elevated mapping where medium
- * becomes high and high becomes max, leveraging their superior reasoning capability.
+ * levels (low/medium/high/max). Opus uses the standard mapping; max is reached only
+ * through explicit pi max, or xhigh on Opus.
  *
  * IMPORTANT: The CLI does NOT support --thinking-budget. Only --effort is supported.
  */
@@ -33,16 +33,12 @@ const STANDARD_EFFORT_MAP: Record<ThinkingLevel, CliEffortLevel> = {
 };
 
 /**
- * Opus model mapping: shifted up for elevated reasoning.
- * Opus models get max capability at high/xhigh levels.
+ * Opus model mapping: the standard map, except explicit xhigh reaches max.
+ * medium and high are not shifted, so max is never reached implicitly.
  */
 const OPUS_EFFORT_MAP: Record<ThinkingLevel, CliEffortLevel> = {
-  minimal: "low",
-  low: "low",
-  medium: "high", // shifted: standard high
-  high: "max", // shifted: maximum capability
-  xhigh: "max", // Opus gets max
-  max: "max",
+  ...STANDARD_EFFORT_MAP,
+  xhigh: "max",
 };
 
 /** Describe Pi levels using CLI efforts, retaining catalog capability exclusions.

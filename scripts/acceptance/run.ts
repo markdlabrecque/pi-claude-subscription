@@ -344,10 +344,17 @@ async function captureRelay<T>(
   fn: () => Promise<T>,
 ): Promise<Measured & { value?: T; error?: unknown }> {
   const lines: string[] = [];
-  const saved = { error: console.error, warn: console.warn };
+  const saved = {
+    error: console.error,
+    warn: console.warn,
+    debug: process.env.PI_CLAUDE_SUBSCRIPTION_DEBUG,
+  };
   console.error = console.warn = (...parts: unknown[]) => {
     lines.push(parts.map(String).join(" "));
   };
+  // The relay writes its per-request lines only under the debug flag (#96).
+  // They are captured here in memory, never printed or saved raw.
+  process.env.PI_CLAUDE_SUBSCRIPTION_DEBUG = "1";
   let value: T | undefined;
   let error: unknown;
   try {
@@ -357,6 +364,9 @@ async function captureRelay<T>(
   } finally {
     console.error = saved.error;
     console.warn = saved.warn;
+    if (saved.debug === undefined) {
+      delete process.env.PI_CLAUDE_SUBSCRIPTION_DEBUG;
+    } else process.env.PI_CLAUDE_SUBSCRIPTION_DEBUG = saved.debug;
   }
   const upstreamLines = lines.filter((l) =>
     /relay POST \/v1\/messages -> upstream status=/.test(l),

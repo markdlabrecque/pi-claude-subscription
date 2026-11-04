@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.7.0
+
+Changes since [v1.6.0](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v1.6.0).
+
+### Fixed
+
+- Opus thinking levels no longer map one notch too high: Pi `medium` and `high` now use CLI `medium` and `high` on every model, and Opus `xhigh` uses `max` ([#93](https://github.com/markdlabrecque/pi-claude-subscription/issues/93)).
+- Relay diagnostics no longer draw over Pi's prompt editor. Routine relay lines stay off the terminal unless `PI_CLAUDE_SUBSCRIPTION_DEBUG` is set ([#96](https://github.com/markdlabrecque/pi-claude-subscription/issues/96)).
+
+### Install
+
+```bash
+pi install git:github.com/markdlabrecque/pi-claude-subscription@v1.7.0
+```
+
+Pinned tags do not advance through `pi update --extensions`. Requirements and compatibility are unchanged from v1.6.0.
+
 ## v1.6.0
 
 Changes since the last published GitHub release, [v0.4.0](https://github.com/markdlabrecque/pi-claude-subscription/releases/tag/v0.4.0). The v1.5.0 tag exists, but its release workflow failed before publication. Compared with that tag, v1.6.0 fixes CI and updates release metadata and documentation; it adds no further runtime changes.
