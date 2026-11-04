@@ -83,7 +83,10 @@ export interface Relay {
 export interface RelayOptions {
   /** Upstream base URL. Defaults to ANTHROPIC_BASE_URL, then api.anthropic.com. */
   upstream?: string;
-  /** Receives one line per request. Defaults to console.error. */
+  /**
+   * Receives one line per request. Defaults to console.error; routine
+   * per-request lines then appear only under the debug flag.
+   */
   log?: (line: string) => void;
   /** Sees the parsed Messages body; a returned value replaces it. */
   onPayload?: (payload: unknown) => unknown | Promise<unknown>;
@@ -141,6 +144,14 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
   const log =
     options?.log ??
     ((line: string) => console.error(`[pi-claude-subscription] ${line}`));
+  // Pi's TUI owns the terminal: anything written to stderr is drawn over the
+  // prompt editor (#96). Routine per-request lines therefore reach the
+  // default sink only under the debug flag; rejections and failures still log.
+  const trace =
+    options?.log ??
+    ((line: string) => {
+      if (isDebugEnabled()) log(line);
+    });
   const send = upstream.protocol === "https:" ? httpsRequest : httpRequest;
 
   let upstreamCount = 0;
@@ -206,7 +217,7 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
         up.on("close", () => {
           if (!up.complete) failTransport();
         });
-        log(
+        trace(
           `relay POST ${req.url?.split("?")[0]} -> upstream status=${up.statusCode} upstream=${upstreamCount} rejected=${rejectedCount}`,
         );
         if (up.statusCode !== undefined && up.statusCode >= 400) {
@@ -320,7 +331,7 @@ export async function startRelay(options?: RelayOptions): Promise<Relay> {
       return;
     }
 
-    log(`relay ${req.method} ${path} answered locally, not forwarded`);
+    trace(`relay ${req.method} ${path} answered locally, not forwarded`);
     req.resume();
     reject(res, 404, "pi-claude-subscription relay: path not forwarded");
   });
