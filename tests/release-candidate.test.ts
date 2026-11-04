@@ -15,8 +15,8 @@ import { installFakeClaude } from "./harness";
 
 const root = join(__dirname, "..");
 
-it("prepares extension v1.4.0 stable independently of the pinned SDK pair", () => {
-  expect(manifest.version).toBe("1.4.0");
+it("prepares a stable extension release independently of the pinned SDK pair", () => {
+  expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
   expect(lockfile.version).toBe(manifest.version);
   expect(lockfile.packages[""].version).toBe(manifest.version);
   expect(manifest.devDependencies["@earendil-works/pi-ai"]).toBe("1.4.0");
@@ -73,7 +73,7 @@ it("records fresh standalone loader evidence from unpacked source with an isolat
           event: "extension_load",
           outcome: "success",
           reason: "registered",
-          versions: { extension: "1.4.0", pi: "1.4.0", cli: null },
+          versions: { extension: manifest.version, pi: "1.4.0", cli: null },
         }),
       ]),
     );
