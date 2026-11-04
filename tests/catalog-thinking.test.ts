@@ -95,16 +95,8 @@ it("preserves catalog capabilities and exercises every advertised CLI thinking l
             ? undefined
             : reasoning === "max"
               ? "max"
-              : model.id.includes("opus")
-                ? (
-                    {
-                      minimal: "low",
-                      low: "low",
-                      medium: "high",
-                      high: "max",
-                      xhigh: "max",
-                    } as const
-                  )[reasoning]
+              : model.id.includes("opus") && reasoning === "xhigh"
+                ? "max"
                 : (
                     {
                       minimal: "low",
@@ -137,7 +129,9 @@ it("preserves catalog capabilities and exercises every advertised CLI thinking l
     expect(() => mapThinkingEffort("max", "claude-sonnet-4-5")).toThrow(
       "not verified",
     );
-    expect(() => mapThinkingEffort("high", "fake-opus-999")).toThrow(
+    // Opus uses the standard map: high is high, never silently max.
+    expect(mapThinkingEffort("high", "fake-opus-999")).toBe("high");
+    expect(() => mapThinkingEffort("max", "fake-opus-999")).toThrow(
       "not verified",
     );
   } finally {
