@@ -252,6 +252,15 @@ async function run(userMessage) {
       ],
     }),
   };
+  // Acceptance-script tests need a real Messages shape without our private
+  // harness metadata, and a terminal result after synthetic SSE completes.
+  if (process.env.FAKE_CLAUDE_ACCEPTANCE_SHAPE === "1") {
+    const body = JSON.parse(request.body);
+    delete body.fake_cwd;
+    delete body.fake_args;
+    delete body.fake_env;
+    request.body = JSON.stringify(body);
+  }
   const url = `${process.env.ANTHROPIC_BASE_URL}/v1/messages`;
   let res = await fetch(url, request);
   // Like the real CLI, retry a server error once; the relay rejects the retry.
@@ -278,6 +287,13 @@ async function run(userMessage) {
           }
           event(parsed);
         }
+      }
+      if (process.env.FAKE_CLAUDE_ACCEPTANCE_SHAPE === "1") {
+        emit({
+          type: "result",
+          subtype: "success",
+          session_id: "fake-session",
+        });
       }
     } catch {
       // Model a CLI stalled in its retry/backoff path. The provider must end

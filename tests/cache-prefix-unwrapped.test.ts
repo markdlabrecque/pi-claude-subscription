@@ -3,6 +3,7 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { normalizeCliEnvironment } from "../src/isolation";
 import { streamViaCli } from "../src/provider";
 import { DEBUG_ENV } from "../src/debug-log";
+import { assertPreviousPrefix } from "../scripts/acceptance/cache-prefix-assertions";
 import {
   installFakeClaude,
   startFakeUpstream,
@@ -105,6 +106,7 @@ it("keeps the prefix stable across real calls when the reminder is unwrapped in 
   expect(envText(first)).not.toContain(first.fake_cwd);
   expect(envText(first)).toContain("test-platform");
   expect(envText(second)).toBe(envText(first));
+  expect(() => assertPreviousPrefix(first, second)).not.toThrow();
 });
 
 async function diagnosticRecord(): Promise<Record<string, any>> {
