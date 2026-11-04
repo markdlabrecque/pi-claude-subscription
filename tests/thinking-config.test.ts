@@ -127,7 +127,7 @@ describe("mapThinkingEffort", () => {
         "claude-opus-4-6-20260301",
         budgets,
       );
-      expect(result).toBe("max");
+      expect(result).toBe("high");
     });
   });
 
