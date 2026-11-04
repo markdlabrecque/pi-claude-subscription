@@ -96,7 +96,7 @@ it("preserves catalog capabilities and exercises every advertised CLI thinking l
             : reasoning === "max"
               ? "max"
               : model.id.includes("opus") && reasoning === "xhigh"
-                ? args[args.indexOf("--effort") + 1] // high or max both acceptable
+                ? "max"
                 : (
                     {
                       minimal: "low",

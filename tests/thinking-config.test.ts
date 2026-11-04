@@ -78,6 +78,10 @@ describe("mapThinkingEffort", () => {
       expect(mapThinkingEffort("high", model, undefined)).toBe("high");
     });
 
+    it("maps xhigh to max", () => {
+      expect(mapThinkingEffort("xhigh", model, undefined)).toBe("max");
+    });
+
     it("reaches max through explicit max", () => {
       expect(mapThinkingEffort("max", "claude-opus-5-5", undefined)).toBe(
         "max",
@@ -127,7 +131,7 @@ describe("mapThinkingEffort", () => {
         "claude-opus-4-6-20260301",
         budgets,
       );
-      expect(result).toBe("max");
+      expect(result).toBe("high");
     });
   });
 
