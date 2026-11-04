@@ -536,7 +536,7 @@ describe("streamViaCli", () => {
       expect(args[idx + 1]).toBe("high");
     });
 
-    it("passes elevated effort to spawnClaude when options.reasoning is provided on Opus model", async () => {
+    it("passes high effort to spawnClaude for high reasoning on Opus model", async () => {
       const model = mockModels[1] as any; // opus
       const context = {
         messages: [{ role: "user", content: "Think about this" }],
@@ -545,11 +545,11 @@ describe("streamViaCli", () => {
       streamViaCli(model, context, { reasoning: "high" } as any);
       await vi.advanceTimersByTimeAsync(0);
 
-      // Opus "high" should map to "max"
+      // Opus "high" maps to "high", not "max"
       const args = (spawn as any).mock.calls[0][1] as string[];
       expect(args).toContain("--effort");
       const idx = args.indexOf("--effort");
-      expect(args[idx + 1]).toBe("max");
+      expect(args[idx + 1]).toBe("high");
     });
 
     it("does not pass effort when reasoning is undefined", async () => {
@@ -579,7 +579,7 @@ describe("streamViaCli", () => {
       expect(args[idx + 1]).toBe("medium");
     });
 
-    it("passes high effort for medium reasoning on Opus (elevated)", async () => {
+    it("passes medium effort for medium reasoning on Opus", async () => {
       const model = mockModels[1] as any; // opus
       const context = {
         messages: [{ role: "user", content: "Think" }],
@@ -590,7 +590,7 @@ describe("streamViaCli", () => {
 
       const args = (spawn as any).mock.calls[0][1] as string[];
       const idx = args.indexOf("--effort");
-      expect(args[idx + 1]).toBe("high");
+      expect(args[idx + 1]).toBe("medium");
     });
   });
 
