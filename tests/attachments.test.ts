@@ -123,9 +123,9 @@ describe("attachments", () => {
   });
 });
 
-// Pi 1.x UserMessage / ToolResultMessage carry text and images only. The
-// provider cannot carry an image outside the message it sends (replay drops
-// earlier ones to placeholders), so it must refuse rather than omit.
+// Pi 1.x UserMessage / ToolResultMessage carry text and images only. Images
+// travel with their own turn; anything else, or a malformed image, must be
+// refused rather than omitted.
 const IMG = Buffer.from("not-really-a-png").toString("base64");
 const image = { type: "image", data: IMG, mimeType: "image/png" };
 const callMessage = {
@@ -175,43 +175,44 @@ describe("attachments the provider cannot carry are rejected, not omitted", () =
     claude = installFakeClaude(upstream.url);
   });
 
-  it("rejects an image in an earlier user message (default replay)", async () => {
-    await expectRejected(
-      [
+  it("sends images from an earlier user message and a tool result, each after its own turn", async () => {
+    const shot = Buffer.from("a-screenshot").toString("base64");
+    const stream = streamViaCli(model, {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "First" }, image] },
+        callMessage,
         {
-          role: "user",
-          content: [{ type: "text", text: "First" }, image],
-          timestamp: 1,
+          ...imageResult,
+          content: [
+            { type: "text", text: "Seen it" },
+            { type: "image", data: shot, mimeType: "image/jpeg" },
+          ],
         },
-        { role: "assistant", content: [{ type: "text", text: "ok" }] },
-        { role: "user", content: "And now?", timestamp: 4 },
-      ],
-      /image/i,
-    );
-  });
-
-  it("rejects an image-bearing tool result in a custom-tool follow-up", async () => {
-    await expectRejected(
-      [
-        { role: "user", content: "Greet Pi", timestamp: 1 },
-        callMessage,
-        imageResult,
-      ],
-      /image/i,
-    );
-  });
-
-  it("rejects an image-bearing tool result that precedes a new user turn", async () => {
-    await expectRejected(
-      [
-        { role: "user", content: "Greet Pi", timestamp: 1 },
-        callMessage,
-        imageResult,
         { role: "assistant", content: [{ type: "text", text: "Done" }] },
         { role: "user", content: "Thanks", timestamp: 5 },
       ],
-      /image/i,
-    );
+    });
+    for await (const _ of stream);
+
+    expect(((await stream.result()) as any).stopReason).toBe("stop");
+    expect(upstream!.requests).toHaveLength(1);
+    const sent = (upstream!.requests[0].body as any).messages[0].content;
+    expect(
+      sent.map((b: any) =>
+        b.type === "image"
+          ? `${b.source.media_type} ${b.source.data}`
+          : b.text.split("\n")[0],
+      ),
+    ).toEqual([
+      '<turn role="user">',
+      `image/png ${IMG}`,
+      '<turn role="assistant">',
+      '<turn role="tool" name="hello">',
+      `image/jpeg ${shot}`,
+      '<turn role="assistant">',
+      '<turn role="user">',
+    ]);
+    expect(JSON.stringify(sent)).not.toContain("could not be included");
   });
 
   it("rejects an unknown block in an earlier user message and in a tool result", async () => {
@@ -334,13 +335,30 @@ describe("attachments in resume mode", () => {
     expect(JSON.stringify(body.messages)).not.toContain(IMG);
   });
 
-  it("rejects a new image-bearing tool result instead of sending a placeholder", async () => {
+  it("passes a new image-bearing tool result to a resumed session", async () => {
     writeSession(home!, "pi-session-1", "{}\n");
-    await expectRejected(
-      [history[0], callMessage, imageResult],
-      /image/i,
-      options,
+    const stream = streamViaCli(
+      model,
+      {
+        messages: [
+          { role: "user", content: "Greet Pi" },
+          callMessage,
+          imageResult,
+        ],
+      },
+      options as any,
     );
+    for await (const _ of stream);
+
+    const body = upstream!.requests[0].body as any;
+    expect(body.fake_args).toContain("--resume");
+    expect(body.messages[0].content).toEqual([
+      { type: "text", text: "TOOL RESULT (hello):\nSeen it" },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: IMG },
+      },
+    ]);
   });
 
   it("passes a new final user image to a resumed session", async () => {
@@ -365,12 +383,21 @@ describe("attachments in resume mode", () => {
     });
   });
 
-  it("rejects, with no request, when a lost session falls back to replay with earlier images", async () => {
-    // No session file: resume falls back to replay, which cannot carry them.
-    await expectRejected(
-      [...history, { role: "user", content: "Next question" }],
-      /image/i,
-      options,
+  it("carries earlier images when a lost session falls back to replay", async () => {
+    // No session file: resume falls back to replay, which resends them.
+    const stream = streamViaCli(
+      model,
+      { messages: [...history, { role: "user", content: "Next question" }] },
+      options as any,
     );
+    for await (const _ of stream);
+
+    expect(((await stream.result()) as any).stopReason).toBe("stop");
+    expect(upstream!.requests).toHaveLength(1);
+    const body = upstream!.requests[0].body as any;
+    expect(body.fake_args).not.toContain("--resume");
+    expect(
+      body.messages[0].content.filter((b: any) => b.type === "image"),
+    ).toHaveLength(2);
   });
 });

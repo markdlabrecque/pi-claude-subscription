@@ -4,8 +4,8 @@
  * Follows the reference project's buildPromptBlocks() pattern:
  * - USER: / ASSISTANT: / TOOL RESULT: labels
  * - Content blocks serialized by type
- * - Images and documents in the final user message are passed through to Anthropic API format (HIST-02)
- * - Images in non-final messages get placeholder text with console.warn
+ * - Images in user messages and tool results, and documents in user messages,
+ *   are passed through as Anthropic API blocks right after their message
  */
 
 import {
@@ -21,8 +21,7 @@ import {
 } from "./tool-mapping.js";
 
 /**
- * Anthropic API content block types for passthrough (images and documents).
- * Used when the final user message contains images that need to be
+ * Anthropic API content block types for passthrough (images and documents),
  * translated from pi-ai format to Anthropic format.
  */
 type AnthropicContentBlock =
@@ -56,7 +55,7 @@ let placeholderImageCount = 0;
  * Anthropic format: { type: "image", source: { type: "base64", media_type: string, data: string } }
  */
 function translateImageBlock(piBlock: any): AnthropicContentBlock | null {
-  if (piBlock.data && piBlock.mimeType) {
+  if (isValidImage(piBlock)) {
     return {
       type: "image",
       source: {
@@ -118,6 +117,68 @@ function contentHasPassthrough(content: string | any[]): boolean {
   return content.some(
     (block) => block.type === "image" || block.type === "document",
   );
+}
+
+/** Whether any user message or tool result carries a block sent as-is. */
+function anyPassthrough(messages: any[]): boolean {
+  return messages.some(
+    (m) =>
+      (m.role === "user" && documentBlocks(m.content).length > 0) ||
+      (m.role !== "assistant" && imageBlocks(m.content).length > 0),
+  );
+}
+
+/** Image blocks from a user message or tool result, in Anthropic format. */
+function imageBlocks(content: string | any[]): AnthropicContentBlock[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((b) =>
+    b.type === "image" ? (translateImageBlock(b) ?? []) : [],
+  );
+}
+
+/** The content with its passed-through images and documents removed. */
+function withoutPassthrough(content: string | any[]): string | any[] {
+  if (!Array.isArray(content)) return content;
+  return content.filter(
+    (b) => b.type !== "document" && !(b.type === "image" && isValidImage(b)),
+  );
+}
+
+/**
+ * Labeled history text with each message's images and documents as their own
+ * blocks right after that message's text.
+ */
+function createBlockList() {
+  const blocks: AnthropicContentBlock[] = [];
+  let lines: string[] = [];
+  const flush = () => {
+    if (lines.length === 0) return;
+    blocks.push({ type: "text", text: lines.join("\n") });
+    lines = [];
+  };
+  return {
+    text: (...parts: string[]) => void lines.push(...parts),
+    attach: (attachments: AnthropicContentBlock[]) => {
+      if (attachments.length === 0) return;
+      flush();
+      blocks.push(...attachments);
+    },
+    /** The blocks, or plain text when nothing was attached. */
+    result: (): string | AnthropicContentBlock[] => {
+      if (blocks.length === 0) return lines.join("\n") || "";
+      flush();
+      return blocks;
+    },
+  };
+}
+
+/** The label line that introduces a tool result in history text. */
+function toolResultLabel(toolName?: string): string {
+  // Custom tools: don't reference MCP tool name. Present result plainly.
+  if (toolName && isCustomToolName(toolName))
+    return `TOOL RESULT (${toolName}):`;
+  const claudeToolName = toolName ? mapPiToolNameToClaude(toolName) : "unknown";
+  return `TOOL RESULT (historical ${claudeToolName}):`;
 }
 
 /**
@@ -197,44 +258,33 @@ export function buildResumePrompt(context: {
     newMessages.push(messages[i]);
   }
 
-  // If there are only tool results + one user message, build a combined prompt
-  const parts: string[] = [];
+  // Tool results as labeled text, then the user message. Images and documents
+  // follow the text of the message they came with.
+  const list = createBlockList();
   for (const msg of newMessages) {
     if (msg.role === "toolResult") {
-      if (msg.toolName && isCustomToolName(msg.toolName)) {
-        parts.push(`TOOL RESULT (${msg.toolName}):`);
-      } else {
-        const claudeToolName = msg.toolName
-          ? mapPiToolNameToClaude(msg.toolName)
-          : "unknown";
-        parts.push(`TOOL RESULT (historical ${claudeToolName}):`);
-      }
-      parts.push(toolResultContentToText(msg.content));
+      list.text(
+        toolResultLabel(msg.toolName),
+        toolResultContentToText(withoutPassthrough(msg.content)),
+      );
+      list.attach(imageBlocks(msg.content));
     } else if (msg.role === "user") {
-      // Check for images in the final user message
       if (contentHasPassthrough(msg.content)) {
-        const textSoFar = parts.join("\n");
-        const userContent = buildFinalUserContent(msg.content);
-        const result: AnthropicContentBlock[] = [];
-        if (textSoFar) {
-          result.push({ type: "text", text: textSoFar });
-        }
-        result.push(...userContent);
-        return result;
+        list.attach(buildFinalUserContent(msg.content));
+      } else {
+        list.text(userContentToText(msg.content));
       }
-      parts.push(userContentToText(msg.content));
     }
   }
 
-  return parts.join("\n") || "";
+  return list.result();
 }
 
 /**
  * Build the prompt for replay mode: one text block per history message, oldest
  * first, each wrapped in a <turn> tag. Tool calls and results ride along as
- * text inside their turns. Images in the final user message pass through as
- * image blocks after its turn, and documents in any user turn follow that
- * turn. Earlier images become a text placeholder.
+ * text inside their turns. Documents in a user turn, then images in a user or
+ * tool turn, follow that turn as their own blocks.
  *
  * Block bytes depend only on their own message, so earlier blocks stay stable
  * between turns and hit the prompt cache.
@@ -243,48 +293,31 @@ export function buildReplayPrompt(context: {
   messages: any[];
 }): AnthropicContentBlock[] {
   placeholderImageCount = 0;
-  const finalUserIndex = findFinalUserMessageIndex(context.messages);
   const blocks: AnthropicContentBlock[] = [];
 
-  context.messages.forEach((message, i) => {
+  for (const message of context.messages) {
     let tag: string;
     let text: string;
     if (message.role === "user") {
       tag = `<turn role="user">`;
-      text = userContentToText(
-        i === finalUserIndex && contentHasPassthrough(message.content)
-          ? (message.content as any[]).filter(
-              (b) => b.type !== "image" && b.type !== "document",
-            )
-          : withoutDocuments(message.content),
-      );
+      text = userContentToText(withoutPassthrough(message.content));
     } else if (message.role === "assistant") {
       tag = `<turn role="assistant">`;
       text = contentToText(message.content);
     } else if (message.role === "toolResult") {
       tag = `<turn role="tool"${message.toolName ? ` name="${message.toolName}"` : ""}>`;
-      text = toolResultContentToText(message.content);
+      text = toolResultContentToText(withoutPassthrough(message.content));
     } else {
-      return;
+      continue;
     }
     blocks.push({ type: "text", text: `${tag}\n${text}\n</turn>` });
     if (message.role === "user")
       blocks.push(...documentBlocks(message.content));
-
-    if (i === finalUserIndex && contentHasPassthrough(message.content)) {
-      blocks.push(
-        ...buildFinalUserContent(message.content).filter(
-          (b) => b.type === "image",
-        ),
-      );
-    }
-  });
-
-  if (placeholderImageCount > 0) {
-    console.warn(
-      `[pi-claude-subscription] ${placeholderImageCount} image(s) in conversation history could not be included in the prompt`,
-    );
+    if (message.role !== "assistant")
+      blocks.push(...imageBlocks(message.content));
   }
+
+  warnAboutPlaceholders();
   return blocks;
 }
 
@@ -293,101 +326,47 @@ export function buildPrompt(context: {
 }): string | AnthropicContentBlock[] {
   // Reset placeholder counter for each call
   placeholderImageCount = 0;
+  const messages = context.messages;
+
+  if (anyPassthrough(messages)) {
+    // Each message's images and documents follow its text. A user message
+    // that ends the conversation is sent as it came, without a label.
+    const list = createBlockList();
+    messages.forEach((message, i) => {
+      if (message.role === "user") {
+        if (i === messages.length - 1) {
+          list.attach(buildFinalUserContent(message.content));
+          return;
+        }
+        list.text(
+          "USER:",
+          userContentToText(withoutPassthrough(message.content)),
+        );
+        list.attach([
+          ...documentBlocks(message.content),
+          ...imageBlocks(message.content),
+        ]);
+      } else if (message.role === "assistant") {
+        list.text("ASSISTANT:", contentToText(message.content));
+      } else if (message.role === "toolResult") {
+        list.text(
+          toolResultLabel(message.toolName),
+          toolResultContentToText(withoutPassthrough(message.content)),
+        );
+        list.attach(imageBlocks(message.content));
+      }
+    });
+    warnAboutPlaceholders();
+    return list.result();
+  }
 
   // Special case: when conversation ends with a custom tool result,
   // present it directly instead of complex history replay
-  const customToolPrompt = buildCustomToolResultPrompt(context.messages);
+  const customToolPrompt = buildCustomToolResultPrompt(messages);
   if (customToolPrompt) {
     // customToolPrompt calls userContentToText which may increment placeholderImageCount
-    if (placeholderImageCount > 0) {
-      console.warn(
-        `[pi-claude-subscription] ${placeholderImageCount} image(s) in conversation history could not be included in the prompt`,
-      );
-    }
+    warnAboutPlaceholders();
     return customToolPrompt;
-  }
-
-  // Determine if any message has images worth passing through
-  const finalUserIndex = findFinalUserMessageIndex(context.messages);
-  const finalUserHasImages =
-    finalUserIndex >= 0 &&
-    contentHasPassthrough(context.messages[finalUserIndex].content);
-  const anyToolResultHasImages = context.messages.some(
-    (m: any) => m.role === "toolResult" && toolResultHasImages(m.content),
-  );
-
-  const anyUserHasDocument = context.messages.some(
-    (m: any) =>
-      m.role === "user" &&
-      Array.isArray(m.content) &&
-      m.content.some((b: any) => b.type === "document" && b.source),
-  );
-
-  if (finalUserHasImages || anyToolResultHasImages || anyUserHasDocument) {
-    // Build history as text (all messages except the final user message)
-    const historyParts: string[] = [];
-    const historyDocuments: AnthropicContentBlock[] = [];
-    const toolResultImageBlocks: AnthropicContentBlock[] = [];
-    for (let i = 0; i < context.messages.length; i++) {
-      if (i === finalUserIndex) continue; // Skip final user message -- handled separately
-      const message = context.messages[i];
-      if (message.role === "user") {
-        historyDocuments.push(...documentBlocks(message.content));
-        historyParts.push("USER:");
-        historyParts.push(userContentToText(withoutDocuments(message.content)));
-      } else if (message.role === "assistant") {
-        historyParts.push("ASSISTANT:");
-        historyParts.push(contentToText(message.content));
-      } else if (message.role === "toolResult") {
-        if (message.toolName && isCustomToolName(message.toolName)) {
-          historyParts.push(`TOOL RESULT (${message.toolName}):`);
-        } else {
-          const claudeToolName = message.toolName
-            ? mapPiToolNameToClaude(message.toolName)
-            : "unknown";
-          historyParts.push(`TOOL RESULT (historical ${claudeToolName}):`);
-        }
-        // Extract text portion of tool result
-        historyParts.push(toolResultContentToText(message.content));
-        // Collect image blocks from tool results for passthrough
-        if (Array.isArray(message.content)) {
-          for (const block of message.content) {
-            if (block.type === "image") {
-              const translated = translateImageBlock(block);
-              if (translated) {
-                toolResultImageBlocks.push(translated);
-                // Undo the placeholder count from toolResultContentToText since we're passing through
-                placeholderImageCount--;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Build final user message content blocks
-    const finalUserContent =
-      finalUserIndex >= 0
-        ? buildFinalUserContent(context.messages[finalUserIndex].content)
-        : [];
-
-    // Combine: history text + tool result images + final user content blocks
-    const result: AnthropicContentBlock[] = [...historyDocuments];
-    const historyText = historyParts.join("\n");
-    if (historyText) {
-      result.push({ type: "text", text: historyText });
-    }
-    // Insert tool result images after history text (Claude sees them in context)
-    result.push(...toolResultImageBlocks);
-    result.push(...finalUserContent);
-
-    if (placeholderImageCount > 0) {
-      console.warn(
-        `[pi-claude-subscription] ${placeholderImageCount} image(s) in conversation history could not be included in the prompt`,
-      );
-    }
-
-    return result;
   }
 
   // No images in final user message: standard text-only path
@@ -401,26 +380,22 @@ export function buildPrompt(context: {
       parts.push("ASSISTANT:");
       parts.push(contentToText(message.content));
     } else if (message.role === "toolResult") {
-      if (message.toolName && isCustomToolName(message.toolName)) {
-        // Custom tools: don't reference MCP tool name. Present result plainly.
-        parts.push(`TOOL RESULT (${message.toolName}):`);
-      } else {
-        const claudeToolName = message.toolName
-          ? mapPiToolNameToClaude(message.toolName)
-          : "unknown";
-        parts.push(`TOOL RESULT (historical ${claudeToolName}):`);
-      }
+      parts.push(toolResultLabel(message.toolName));
       parts.push(toolResultContentToText(message.content));
     }
   }
 
+  warnAboutPlaceholders();
+  return parts.join("\n") || "";
+}
+
+/** Warn once when images had to be replaced by placeholder text. */
+function warnAboutPlaceholders(): void {
   if (placeholderImageCount > 0) {
     console.warn(
       `[pi-claude-subscription] ${placeholderImageCount} image(s) in conversation history could not be included in the prompt`,
     );
   }
-
-  return parts.join("\n") || "";
 }
 
 /**
@@ -428,16 +403,14 @@ export function buildPrompt(context: {
  * intact, or null if there is none. Rejecting it up front keeps attachments
  * from being dropped or replaced by a placeholder silently.
  *
- * Images are carried only in the final user message; tool results carry text
- * only; user messages may also carry documents with a source. A resumed CLI
- * session already holds everything up to the last assistant turn, so only
- * what follows it is checked.
+ * User messages carry text, images and documents with a source; tool results
+ * carry text and images. A resumed CLI session already holds everything up to
+ * the last assistant turn, so only what follows it is checked.
  */
 export function findUnsupportedAttachment(
   messages: any[],
   resumed = false,
 ): string | null {
-  const finalUserIndex = findFinalUserMessageIndex(messages);
   let start = 0;
   if (resumed) {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -451,26 +424,18 @@ export function findUnsupportedAttachment(
   for (let i = start; i < messages.length; i++) {
     const { role, content } = messages[i];
     if (!Array.isArray(content)) continue;
-    if (role === "user") {
-      for (const block of content) {
-        if (block.type === "text") continue;
+    if (role !== "user" && role !== "toolResult") continue;
+    for (const block of content) {
+      if (block.type === "text") continue;
+      if (block.type === "image") {
+        if (!isValidImage(block)) return MALFORMED_IMAGE;
+        continue;
+      }
+      if (role === "user") {
         if (block.type === "document" && block.source) continue;
-        if (block.type === "image") {
-          if (!isValidImage(block)) return MALFORMED_IMAGE;
-          if (i === finalUserIndex) continue;
-          return "an image in an earlier user message cannot be sent by pi-claude-subscription; only images in the latest user message reach Claude.";
-        }
         return `"${block.type}" attachments are not supported by pi-claude-subscription; only text, images, and documents can be sent.`;
       }
-    } else if (role === "toolResult") {
-      for (const block of content) {
-        if (block.type === "text") continue;
-        if (block.type === "image") {
-          if (!isValidImage(block)) return MALFORMED_IMAGE;
-          return `an image in the ${messages[i].toolName ?? "tool"} result cannot be sent by pi-claude-subscription; tool results can carry text only.`;
-        }
-        return `"${block.type}" attachments are not supported by pi-claude-subscription in tool results; only text can be sent.`;
-      }
+      return `"${block.type}" attachments are not supported by pi-claude-subscription in tool results; only text and images can be sent.`;
     }
   }
   return null;
@@ -616,12 +581,6 @@ function documentBlocks(content: string | any[]): AnthropicContentBlock[] {
     .map((b) => ({ type: "document", source: b.source }));
 }
 
-/** The content with its document blocks removed, for text-only conversion. */
-function withoutDocuments(content: string | any[]): string | any[] {
-  if (!Array.isArray(content)) return content;
-  return content.filter((b) => b.type !== "document");
-}
-
 /**
  * Converts assistant message content to text.
  * Handles string content and array of content blocks (text, thinking, toolCall).
@@ -680,12 +639,4 @@ function toolResultContentToText(content: string | any[]): string {
     }
   }
   return texts.join("\n");
-}
-
-/**
- * Check if a tool result content array contains image blocks.
- */
-function toolResultHasImages(content: string | any[]): boolean {
-  if (typeof content === "string" || !Array.isArray(content)) return false;
-  return content.some((block) => block.type === "image");
 }
