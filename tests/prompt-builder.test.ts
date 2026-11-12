@@ -130,33 +130,6 @@ describe("buildPrompt", () => {
     );
   });
 
-  it("inserts placeholder text for image blocks in non-final user messages", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Look at this image" },
-            { type: "image", data: "abc", mimeType: "image/png" },
-          ],
-        },
-        { role: "assistant", content: "I see." },
-        { role: "user", content: "Now explain it." },
-      ],
-    } as unknown as any;
-
-    const result = buildPrompt(context);
-    // Non-final user message should have placeholder
-    expect(result).toContain(
-      "[An image was shared here but could not be included]",
-    );
-    // Console.warn should be called once with image count
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain("1 image(s)");
-    warnSpy.mockRestore();
-  });
-
   it("handles toolCall with no arguments (maps pi name to Claude name)", () => {
     const context = {
       messages: [
@@ -368,76 +341,51 @@ describe("image passthrough (HIST-02)", () => {
     });
   });
 
-  it("multi-turn with images in non-final user message uses placeholder and returns string", () => {
+  it("keeps images from an earlier user message and a tool result after their own messages", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const png = (data: string) => ({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data },
+    });
     const context = {
       messages: [
         {
           role: "user",
           content: [
             { type: "text", text: "See this" },
-            { type: "image", data: "imgdata", mimeType: "image/png" },
-          ],
-        },
-        { role: "assistant", content: "Noted." },
-        { role: "user", content: "What do you think?" },
-      ],
-    } as unknown as any;
-
-    const result = buildPrompt(context);
-    // No images in final message -> returns string
-    expect(typeof result).toBe("string");
-    // Non-final user message has placeholder
-    expect(result).toContain(
-      "[An image was shared here but could not be included]",
-    );
-    // Console.warn called once with image count
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain("1 image(s)");
-    warnSpy.mockRestore();
-  });
-
-  it("multi-turn with images in both non-final and final user messages", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "First image" },
             { type: "image", data: "img1", mimeType: "image/png" },
           ],
         },
-        { role: "assistant", content: "Got it." },
         {
-          role: "user",
+          role: "assistant",
           content: [
-            { type: "text", text: "Second image" },
-            { type: "image", data: "img2", mimeType: "image/jpeg" },
+            { type: "toolCall", name: "deploy", arguments: { target: "prod" } },
           ],
+        },
+        {
+          role: "toolResult",
+          content: [
+            { type: "text", text: "Deploy succeeded" },
+            { type: "image", data: "img2", mimeType: "image/png" },
+          ],
+          toolName: "deploy",
         },
       ],
     } as unknown as any;
 
-    const result = buildPrompt(context);
-    // Final user message has images -> returns ContentBlock[]
-    expect(Array.isArray(result)).toBe(true);
-    const arr = result as any[];
-    // Non-final user message should have placeholder in the history text
-    const textBlocks = arr.filter((b: any) => b.type === "text");
-    const historyText = textBlocks[0].text;
-    expect(historyText).toContain(
-      "[An image was shared here but could not be included]",
-    );
-    // Final user message image translated to Anthropic format
-    expect(arr).toContainEqual({
-      type: "image",
-      source: { type: "base64", media_type: "image/jpeg", data: "img2" },
-    });
-    // Console.warn called with count of placeholder images (1 placeholder)
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain("1 image(s)");
-    warnSpy.mockRestore();
+    expect(buildPrompt(context)).toEqual([
+      { type: "text", text: "USER:\nSee this" },
+      png("img1"),
+      {
+        type: "text",
+        text:
+          "ASSISTANT:\n" +
+          'Historical tool call (non-executable): mcp__custom-tools__deploy args={"target":"prod"}\n' +
+          "TOOL RESULT (deploy):\nDeploy succeeded",
+      },
+      png("img2"),
+    ]);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("no images returns string (backward compatible)", () => {
@@ -483,41 +431,6 @@ describe("image passthrough (HIST-02)", () => {
       );
     }
     expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
-  });
-
-  it("buildPrompt with custom tool result prompt (images in earlier messages) returns string", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Run this" },
-            { type: "image", data: "imgdata", mimeType: "image/png" },
-          ],
-        },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              name: "deploy",
-              arguments: { target: "prod" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          content: "Deploy succeeded",
-          toolName: "deploy",
-        },
-      ],
-    } as unknown as any;
-
-    const result = buildPrompt(context);
-    // Custom tool result prompt always returns string
-    expect(typeof result).toBe("string");
     warnSpy.mockRestore();
   });
 });
